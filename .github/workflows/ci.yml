@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check yobitsugi
+
+      - name: Type check (mypy)
+        run: mypy yobitsugi --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Tests
+        run: |
+          if [ -d tests ] && [ -n "$(ls tests/*.py 2>/dev/null)" ]; then
+            pytest -v
+          else
+            echo "No tests yet — skipping."
+          fi
+
+      - name: Smoke test CLI
+        run: |
+          yobitsugi version
+          yobitsugi list-platforms

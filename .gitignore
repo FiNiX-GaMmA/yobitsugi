@@ -1,0 +1,174 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.pyo
+
+# Build artifacts
+build/
+dist/
+sdist/
+wheels/
+*.egg
+*.egg-info/
+.eggs/
+MANIFEST
+pip-wheel-metadata/
+share/python-wheels/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ---------- Virtual environments ----------
+.venv/
+venv/
+env/
+ENV/
+.env/
+.python-version
+.tool-versions
+
+# ---------- Test / type / lint caches ----------
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pyre/
+.pytype/
+.cache/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+nosetests.xml
+*.cover
+*.py,cover
+
+# ---------- Node / npm wrapper ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm/
+.yarn-integrity
+# Note: package-lock.json / yarn.lock / pnpm-lock.yaml are committed on purpose.
+
+# ---------- Editors / IDEs ----------
+.vscode/
+!.vscode/settings.json.example
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.spyderproject
+.spyproject
+.ropeproject
+*.sublime-project
+*.sublime-workspace
+.vim/
+
+# ---------- OS metadata ----------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ---------- Secrets / env files (NEVER commit these) ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.netrc
+credentials.json
+secrets.yaml
+.secrets/
+
+# Local-only LLM/API key config
+.api_keys
+api_keys.txt
+*.token
+
+# ---------- Yobitsugi runtime artifacts ----------
+# Workspaces created by `yobitsugi run` / `yobitsugi scan`
+.yobitsugi/
+yobitsugi_workspace/
+
+# Per-file backups written by `apply` before patching
+*.yobitsugi.bak
+
+# Local LLM provider config (lives in ~/.yobitsugi/ but guard against accidental commits)
+config.yaml
+!yobitsugi/data/*.yaml
+
+# Generated scanner outputs accidentally placed in repo
+findings.json
+applied.json
+languages.json
+scan_report.json
+validation.json
+raw/
+
+# ---------- Documentation builds ----------
+docs/_build/
+docs/_static/
+docs/_templates/
+site/
+
+# ---------- Jupyter / notebooks ----------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---------- Logs / temp ----------
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# ---------- Tool-specific ----------
+# Hatch
+.hatch/
+
+# pyenv
+.python-version
+
+# PEP 582
+__pypackages__/
+
+# Direnv
+.envrc
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# Translations
+*.mo
+*.pot
+
+# ---------- IDE / Claude Code workspace ----------
+.claude/cache/
+.claude/logs/
+.claude/sessions/
+# keep .claude/settings.json + skills, ignore caches

@@ -1,0 +1,115 @@
+# scanners.yaml — registry of vulnerability scanners.
+#
+# Add a new scanner with:
+#   <Language>:
+#     - name: scanner_name           # Used as the parser key in parse_reports.py
+#       binary: scanner_bin          # What's checked with `which`
+#       command: 'scanner ... -o {out}'   # {root} = repo, {out} = output path
+#       output: json                 # 'json' | 'xml' | 'txt' | 'inline_stdout'
+#       timeout: 600                 # Seconds, optional. Default 600.
+#
+# If `output: inline_stdout`, run_scanners.py captures stdout into {out} for you.
+# Use this for tools that don't have a write-to-file flag.
+#
+# The _cross_language section runs regardless of detected languages.
+
+Python:
+  - name: bandit
+    binary: bandit
+    command: 'bandit -r {root} -f json -o {out} || true'
+    output: json
+  - name: safety
+    binary: safety
+    command: 'safety check --json --output {out} || true'
+    output: json
+  - name: pip-audit
+    binary: pip-audit
+    command: 'pip-audit --format json --output {out} || true'
+    output: json
+
+JavaScript:
+  - name: eslint
+    binary: eslint
+    command: 'eslint --ext .js,.jsx,.mjs,.cjs --format json -o {out} {root} || true'
+    output: json
+  - name: npm-audit
+    binary: npm
+    command: 'npm audit --json > {out} || true'
+    output: inline_stdout
+
+TypeScript:
+  - name: eslint
+    binary: eslint
+    command: 'eslint --ext .ts,.tsx --format json -o {out} {root} || true'
+    output: json
+
+Java:
+  - name: spotbugs
+    binary: spotbugs
+    command: 'spotbugs -textui -xml:withMessages -output {out} {root} || true'
+    output: xml
+
+Go:
+  - name: gosec
+    binary: gosec
+    command: 'gosec -fmt json -out {out} ./... || true'
+    output: json
+  - name: govulncheck
+    binary: govulncheck
+    command: 'govulncheck -json ./... > {out} || true'
+    output: inline_stdout
+
+Ruby:
+  - name: brakeman
+    binary: brakeman
+    command: 'brakeman -q --format json -o {out} {root} || true'
+    output: json
+  - name: bundler-audit
+    binary: bundler-audit
+    command: 'bundler-audit check --format json --output {out} || true'
+    output: json
+
+PHP:
+  - name: phpstan
+    binary: phpstan
+    command: 'phpstan analyse --error-format=json --no-progress > {out} || true'
+    output: inline_stdout
+
+C:
+  - name: flawfinder
+    binary: flawfinder
+    command: 'flawfinder --minlevel=2 --columns --dataonly --singleline {root} > {out} || true'
+    output: inline_stdout
+
+"C++":
+  - name: flawfinder
+    binary: flawfinder
+    command: 'flawfinder --minlevel=2 --columns --dataonly --singleline {root} > {out} || true'
+    output: inline_stdout
+  - name: cppcheck
+    binary: cppcheck
+    command: 'cppcheck --enable=warning,style,performance --xml --xml-version=2 {root} 2> {out} || true'
+    output: inline_stdout
+
+Rust:
+  - name: cargo-audit
+    binary: cargo
+    command: 'cargo audit --json > {out} || true'
+    output: inline_stdout
+
+Shell:
+  - name: shellcheck
+    binary: shellcheck
+    command: 'find {root} -name "*.sh" -print0 | xargs -0 -r shellcheck -f json1 > {out} || true'
+    output: inline_stdout
+
+_cross_language:
+  - name: semgrep
+    binary: semgrep
+    command: 'semgrep --config=auto --json -o {out} {root} || true'
+    output: json
+    timeout: 1200
+  - name: trufflehog
+    binary: trufflehog
+    command: 'trufflehog filesystem --json --no-update {root} > {out} || true'
+    output: inline_stdout
