@@ -171,3 +171,82 @@ class TestRunCommand:
         assert captured["root"] == tmp_repo
         assert captured["auto"] is True
         assert captured["allow_dirty"] is True
+
+
+class TestScannerToolingCommands:
+    @pytest.fixture(autouse=True)
+    def _isolate_tools_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from yobitsugi.core import tools
+        tools_dir = tmp_path / "yobi_tools"
+        monkeypatch.setattr(tools, "TOOLS_DIR", tools_dir)
+        monkeypatch.setattr(tools, "VENV_DIR", tools_dir / "venv")
+        monkeypatch.setattr(tools, "MANIFEST_PATH", tools_dir / "installed.json")
+
+    def test_list_scanners_outputs_every_scanner(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        rc = cli.main(["list-scanners"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        for expected in ("bandit", "safety", "semgrep", "eslint", "shellcheck"):
+            assert expected in out
+
+    def test_install_scanners_with_nothing_missing(
+        self, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Make every binary "found" so install-scanners has nothing to do.
+        monkeypatch.setattr("shutil.which", lambda _binary: "/usr/local/bin/fake")
+        rc = cli.main(["install-scanners"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "no Python scanners need installing" in out
+
+    def test_install_scanners_calls_pip(
+        self, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No binaries on PATH, so every pip-installable scanner is "missing".
+        monkeypatch.setattr("shutil.which", lambda _binary: None)
+
+        from yobitsugi.core import tools
+        installed: list[str] = []
+
+        def fake_install(name, package):
+            installed.append(name)
+            return True, "ok"
+
+        monkeypatch.setattr(tools, "ensure_venv", lambda: tools.tools_bin_path())
+        monkeypatch.setattr(tools, "install_python_tool", fake_install)
+        rc = cli.main(["install-scanners"])
+        assert rc == 0
+        # bandit / safety / pip-audit / semgrep / flawfinder are all pip-installable.
+        for expected in ("bandit", "safety", "pip-audit", "semgrep", "flawfinder"):
+            assert expected in installed
+        out = capsys.readouterr().out
+        # Non-Python scanners should be listed as manual installs.
+        assert "non-Python scanners" in out
+        assert "eslint" in out
+        assert "shellcheck" in out
+
+    def test_install_scanners_reports_failures(
+        self, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("shutil.which", lambda _binary: None)
+
+        from yobitsugi.core import tools
+
+        def fake_install(name, package):
+            return False, "boom"
+
+        monkeypatch.setattr(tools, "ensure_venv", lambda: tools.tools_bin_path())
+        monkeypatch.setattr(tools, "install_python_tool", fake_install)
+        rc = cli.main(["install-scanners"])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "failed" in out.lower()
+
+    def test_uninstall_scanners_when_empty(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        rc = cli.main(["uninstall-scanners"])
+        assert rc == 0
+        assert "nothing to remove" in capsys.readouterr().out

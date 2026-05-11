@@ -47,12 +47,20 @@ function main() {
   const runner = findRunner();
   if (!runner) {
     fail(
-      "yobitsugi requires Python 3.10+ and one of: uvx, pipx, or uv on PATH.\n" +
+      "yobitsugi requires Python 3.11+ and one of: uvx, pipx, or uv on PATH.\n" +
         "\n" +
-        "  Install uv (recommended):  curl -LsSf https://astral.sh/uv/install.sh | sh\n" +
-        "  Or pipx:                   https://pipx.pypa.io/stable/installation/\n" +
+        "  Install uv (recommended, macOS/Linux):\n" +
+        "    curl -LsSf https://astral.sh/uv/install.sh | sh\n" +
         "\n" +
-        "Then re-run: npx yobitsugi <args>\n"
+        "  Install uv (Windows PowerShell):\n" +
+        "    powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"\n" +
+        "\n" +
+        "  Or install pipx:  https://pipx.pypa.io/stable/installation/\n" +
+        "\n" +
+        "Then re-run: npx yobitsugi <args>\n" +
+        "\n" +
+        "Prefer Python directly? `pipx install yobitsugi && yobitsugi install`\n" +
+        "works without going through npx.\n"
     );
   }
 

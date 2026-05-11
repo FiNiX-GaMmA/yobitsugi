@@ -11,12 +11,12 @@
 
 <div align="center">
 
-[![PyPI version](https://img.shields.io/pypi/v/yobitsugi.svg)](https://pypi.org/project/yobitsugi/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/yobitsugi.svg)](https://pypi.org/project/yobitsugi/)
-[![Python versions](https://img.shields.io/pypi/pyversions/yobitsugi.svg)](https://pypi.org/project/yobitsugi/)
-[![License: MIT](https://img.shields.io/pypi/l/yobitsugi.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/FiNiX-GaMmA/yobitsugi?style=flat&color=yellow)](https://github.com/FiNiX-GaMmA/yobitsugi/stargazers)
-[![GitHub followers](https://img.shields.io/github/followers/FiNiX-GaMmA?label=Follow%20%40FiNiX-GaMmA&style=flat&color=blue)](https://github.com/FiNiX-GaMmA)
+[![PyPI version](https://img.shields.io/pypi/v/yobitsugi?label=pypi&color=blue&cacheSeconds=3600)](https://pypi.org/project/yobitsugi/)
+[![PyPI downloads](https://static.pepy.tech/badge/yobitsugi/month)](https://pepy.tech/project/yobitsugi)
+[![Python versions](https://img.shields.io/pypi/pyversions/yobitsugi?color=blue&cacheSeconds=3600)](https://pypi.org/project/yobitsugi/)
+[![License: MIT](https://img.shields.io/pypi/l/yobitsugi?color=green&cacheSeconds=3600)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/FiNiX-GaMmA/yobitsugi?style=flat&color=yellow&cacheSeconds=3600)](https://github.com/FiNiX-GaMmA/yobitsugi/stargazers)
+[![GitHub followers](https://img.shields.io/github/followers/FiNiX-GaMmA?label=Follow%20%40FiNiX-GaMmA&style=flat&color=blue&cacheSeconds=3600)](https://github.com/FiNiX-GaMmA)
 
 [![CI](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml/badge.svg)](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml)
 [![Release & Publish](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml/badge.svg)](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml)
@@ -43,6 +43,7 @@
 - [Quick start](#quick-start)
 - [Supported AI coding assistants](#supported-ai-coding-assistants)
 - [Supported scanners](#supported-scanners)
+- [Installing scanners](#installing-scanners)
 - [Configure the LLM provider](#configure-the-llm-provider)
 - [Common commands](#common-commands)
 - [Architecture overview](#architecture-overview)
@@ -190,7 +191,7 @@ Uninstall with `yobitsugi uninstall --platform <name>`. List everything with `yo
 
 ## Supported scanners
 
-Auto-detected per language. Missing binaries are skipped, not fatal.
+Auto-detected per language. Missing binaries are skipped, not fatal — and yobitsugi can install most of them for you in an isolated venv (see [Installing scanners](#installing-scanners) below).
 
 | Language | Scanners |
 | --- | --- |
@@ -206,6 +207,40 @@ Auto-detected per language. Missing binaries are skipped, not fatal.
 | Cross-language | `semgrep`, `trufflehog` (secrets scanning) |
 
 Adding a new scanner is one YAML block in [`yobitsugi/data/scanners.yaml`](yobitsugi/data/scanners.yaml) — no code change needed unless the output format is exotic.
+
+---
+
+## Installing scanners
+
+yobitsugi orchestrates scanners — it doesn't bundle their binaries. When you run `yobitsugi scan` and a scanner isn't on `PATH`, that scanner is silently skipped. To check the situation:
+
+```bash
+yobitsugi list-scanners       # every scanner, install method, and whether it's available
+```
+
+To install the **Python-based** scanners (bandit, safety, pip-audit, semgrep, flawfinder) in one shot, into an isolated venv at `~/.yobitsugi/tools/venv/`:
+
+```bash
+yobitsugi install-scanners    # installs only missing ones
+yobitsugi install-scanners --all   # reinstall/upgrade everything
+
+yobitsugi uninstall-scanners  # wipes ~/.yobitsugi/tools/ entirely
+```
+
+After `install-scanners` succeeds, every subsequent `yobitsugi scan` or `yobitsugi run` automatically prepends the venv's `bin/` to `PATH` for scanner subprocesses — you don't need to activate anything yourself, and the venv never pollutes your main Python environment.
+
+**Non-Python scanners need their own runtime** and yobitsugi will print install hints rather than try to bootstrap six different package managers badly:
+
+| Runtime | Scanners | Install yourself with |
+| --- | --- | --- |
+| Node | `eslint` | `npm install -g eslint eslint-plugin-security` |
+| Go | `gosec`, `govulncheck` | `go install github.com/securego/gosec/v2/cmd/gosec@latest` etc. |
+| Cargo | `cargo-audit` | `cargo install cargo-audit` |
+| Ruby | `brakeman`, `bundler-audit` | `gem install brakeman bundler-audit` |
+| System | `shellcheck`, `cppcheck`, `trufflehog` | `brew install …` or `apt install …` |
+| Manual | `spotbugs`, `phpstan` | see project release pages |
+
+If you're running yobitsugi via an AI assistant (`/yobitsugi .`), the assistant will see the "scanner skipped" entries in `scan_report.json` and **ask you** whether to run the appropriate install commands.
 
 ---
 
@@ -245,6 +280,15 @@ yobitsugi rollback ~/.yobitsugi/<workspace>      # restore all .yobitsugi.bak fi
 
 yobitsugi list-platforms                         # show all supported assistants
 yobitsugi detect-platforms                       # show only the ones installed
+
+yobitsugi list-scanners                          # every scanner + install status
+yobitsugi install-scanners                       # install missing Python scanners into ~/.yobitsugi/tools/venv/
+yobitsugi install-scanners --all                 # force reinstall/upgrade all of them
+yobitsugi uninstall-scanners                     # wipe the managed venv
+
+yobitsugi summary ~/.yobitsugi/<workspace>       # tabular post-run report (runs automatically at the end of `run`/`scan`)
+yobitsugi summary <ws> --format markdown          # markdown tables — paste into chat
+yobitsugi summary <ws> --format json              # structured data for tooling
 ```
 
 ---

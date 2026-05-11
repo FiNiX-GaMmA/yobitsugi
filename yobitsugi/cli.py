@@ -29,6 +29,8 @@ from yobitsugi.installers import INSTALLERS, get_installer
 KNOWN_SUBCOMMANDS = {
     "version", "list-platforms", "detect-platforms", "install", "uninstall",
     "run", "scan", "findings", "rollback", "config",
+    "install-scanners", "uninstall-scanners", "list-scanners",
+    "summary",
 }
 
 
@@ -135,6 +137,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
             by_sev[f["severity"]] = by_sev.get(f["severity"], 0) + 1
         print(f"\n{len(findings)} findings: " +
               ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())))
+
+    # Detailed tabular report — same one `yobitsugi run` emits at completion.
+    from yobitsugi.core import summary as summary_mod
+    summary_mod.render(workspace, mode="rich")
     return 0
 
 
@@ -163,6 +169,17 @@ def cmd_findings(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_summary(args: argparse.Namespace) -> int:
+    """Render the workspace's findings/applied/validation/scan_report as tables."""
+    from yobitsugi.core import summary as summary_mod
+
+    if not args.workspace.is_dir():
+        print(f"[summary] no such workspace: {args.workspace}", file=sys.stderr)
+        return 1
+    summary_mod.render(args.workspace, mode=args.format)
+    return 0
+
+
 def cmd_rollback(args: argparse.Namespace) -> int:
     from yobitsugi.core import apply as apply_mod
 
@@ -171,6 +188,112 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         "--workspace", str(args.workspace),
         "--root", str(args.root or Path.cwd()),
     ])
+
+
+def _load_scanner_registry() -> dict:
+    """Load yobitsugi/data/scanners.yaml without making `yaml` a hard CLI dep."""
+    import yaml  # type: ignore
+
+    pkg_root = Path(__file__).resolve().parent
+    with (pkg_root / "data" / "scanners.yaml").open(encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def cmd_list_scanners(_args: argparse.Namespace) -> int:
+    """Print every known scanner, its install method, and whether the binary is on PATH."""
+    import shutil as _shutil
+
+    from yobitsugi.core import tools
+
+    registry = _load_scanner_registry()
+    plans = tools.build_install_plans(registry)
+    venv_bin = tools.tools_bin_path() if tools.venv_exists() else None
+
+    print(f"{'scanner':<14}  {'method':<8}  {'installed':<11}  {'package / hint'}")
+    print("-" * 90)
+    for plan in plans:
+        # `installed` means: binary is reachable on PATH OR sits in the managed venv.
+        on_path = _shutil.which(plan.name) is not None
+        in_venv = venv_bin is not None and (venv_bin / plan.name).exists()
+        installed = "yes" if (on_path or in_venv) else "no"
+        if in_venv and not on_path:
+            installed += " (venv)"
+        detail = plan.package or plan.hint or "—"
+        print(f"  {plan.name:<12}  {plan.method:<8}  {installed:<11}  {detail}")
+    return 0
+
+
+def cmd_install_scanners(args: argparse.Namespace) -> int:
+    """Auto-install the Python scanners into yobitsugi's isolated venv.
+
+    For non-Python scanners, print install hints — yobitsugi won't manage a Node /
+    Go / gem / cargo / brew install on the user's behalf.
+    """
+    import shutil as _shutil
+
+    from yobitsugi.core import tools
+
+    registry = _load_scanner_registry()
+
+    # Filter to "missing" scanners unless --all was passed: a scanner is "missing"
+    # when its binary isn't on the user's PATH AND isn't in our managed venv.
+    if args.all:
+        targets = tools.build_install_plans(registry)
+    else:
+        venv_bin = tools.tools_bin_path() if tools.venv_exists() else None
+        missing_binaries = set()
+        for _lang, scanners in registry.items():
+            for s in scanners:
+                binary = s["binary"]
+                on_path = _shutil.which(binary) is not None
+                in_venv = venv_bin is not None and (venv_bin / binary).exists()
+                if not (on_path or in_venv):
+                    missing_binaries.add(binary)
+        targets = tools.build_install_plans(registry, missing_binaries=missing_binaries)
+
+    pip_targets = [p for p in targets if p.method == "pip" and not p.already_installed]
+    other_targets = [p for p in targets if p.method != "pip"]
+
+    if pip_targets:
+        print(f"[install-scanners] managed venv: {tools.VENV_DIR}")
+        print(f"[install-scanners] installing {len(pip_targets)} Python scanner(s)...")
+        tools.ensure_venv()
+        failures: list[str] = []
+        for plan in pip_targets:
+            print(f"  - {plan.name} ({plan.package})", end=" ... ", flush=True)
+            ok, msg = tools.install_python_tool(plan.name, plan.package or plan.name)
+            print("ok" if ok else "FAILED")
+            if not ok:
+                print(f"      {msg}")
+                failures.append(plan.name)
+        if failures:
+            print(f"\n[install-scanners] {len(failures)} failed: {', '.join(failures)}")
+            return 1
+    else:
+        print("[install-scanners] no Python scanners need installing.")
+
+    if other_targets:
+        print("\n[install-scanners] non-Python scanners (manual install required):")
+        for plan in other_targets:
+            hint = plan.hint or f"install via {plan.method}"
+            print(f"  - {plan.name:<14}  {hint}")
+
+    print(
+        "\n[install-scanners] done. `yobitsugi scan` will now find the installed tools "
+        "automatically (the managed venv is prepended to PATH for scanner subprocesses)."
+    )
+    return 0
+
+
+def cmd_uninstall_scanners(_args: argparse.Namespace) -> int:
+    from yobitsugi.core import tools
+
+    removed = tools.uninstall_all()
+    if removed:
+        print(f"[uninstall-scanners] removed {removed}")
+    else:
+        print("[uninstall-scanners] nothing to remove.")
+    return 0
 
 
 def cmd_config(args: argparse.Namespace) -> int:
@@ -272,11 +395,53 @@ def build_parser() -> argparse.ArgumentParser:
     p_rb.add_argument("--root", type=Path, help="Repo root (defaults to CWD).")
     p_rb.set_defaults(func=cmd_rollback)
 
+    p_sum = sub.add_parser(
+        "summary",
+        help=(
+            "Render a detailed post-run report (findings, fix outcomes, validation, "
+            "missing scanners, recommended next actions) as tables."
+        ),
+    )
+    p_sum.add_argument("workspace", type=Path)
+    p_sum.add_argument(
+        "--format",
+        choices=["rich", "markdown", "json"],
+        default="rich",
+        help="'rich' = colored terminal tables (default), "
+             "'markdown' = drop-into-chat markdown tables for AI assistants, "
+             "'json' = structured data.",
+    )
+    p_sum.set_defaults(func=cmd_summary)
+
     p_cfg = sub.add_parser("config", help="Show or initialise yobitsugi config.")
     p_cfg.add_argument("--init", action="store_true",
                        help="Write a starter ~/.yobitsugi/config.yaml.")
     p_cfg.add_argument("--force", action="store_true", help="Overwrite existing config.")
     p_cfg.set_defaults(func=cmd_config)
+
+    sub.add_parser(
+        "list-scanners",
+        help="Show every supported scanner, its install method, and whether it's available.",
+    ).set_defaults(func=cmd_list_scanners)
+
+    p_is = sub.add_parser(
+        "install-scanners",
+        help=(
+            "Install missing Python scanners (bandit/safety/pip-audit/semgrep/flawfinder) "
+            "into yobitsugi's isolated venv at ~/.yobitsugi/tools/venv/. "
+            "Prints install hints for non-Python scanners."
+        ),
+    )
+    p_is.add_argument(
+        "--all", action="store_true",
+        help="Install every supported Python scanner, even ones already on PATH.",
+    )
+    p_is.set_defaults(func=cmd_install_scanners)
+
+    sub.add_parser(
+        "uninstall-scanners",
+        help="Delete ~/.yobitsugi/tools/ (managed venv + manifest).",
+    ).set_defaults(func=cmd_uninstall_scanners)
 
     return p
 

@@ -134,16 +134,48 @@ The skill calls an LLM to generate patches. Resolution order: `--provider`/`--mo
 - Fixes are never auto-applied unless `--auto` is explicitly passed.
 - `validate` flags `newly_introduced` findings prominently — those are vulnerabilities the patches accidentally created.
 
+## Before running anything — enter plan mode if supported
+
+`yobitsugi run` modifies files in the user's working tree (it applies LLM-generated patches and writes `.yobitsugi.bak` backups). That's a destructive operation. If the assistant's harness has a plan-mode / dry-run concept, enter it BEFORE invoking yobitsugi so the user can preview and approve.
+
+| Assistant | How to enter plan mode |
+| --- | --- |
+| **Claude Code** | Call the `ExitPlanMode` tool with a written plan first (the canonical Claude Code plan-mode pattern). User must approve before any tool that modifies the filesystem runs. |
+| **Codex** | Use Codex's planning workflow — set `approval_mode = "on-failure"` (or `"never"`) in `~/.codex/config.toml` only after approval, and present the plan first. Per the OpenAI Codex best-practices guide (developers.openai.com/codex/learn/best-practices), Codex supports a plan-first workflow where you write the plan as a structured message, surface it for user approval, then execute. Use Codex's read-only `approval_mode = "read-only"` while drafting the plan, switch to `"on-failure"` after approval to apply patches. |
+| **Cursor** | Use Agent mode's review step; present the plan as a message and wait for approval. |
+| **Aider / Gemini CLI / OpenCode** | No formal plan mode — instead, write the plan as a chat message and explicitly ask the user *"Should I proceed?"* before invoking yobitsugi. Wait for an affirmative reply. |
+| **GitHub Copilot CLI** | Show the planned `yobitsugi` command and ask the user to confirm before executing. |
+
+The plan should cover: which path will be scanned, what severity threshold will be applied, whether `--auto` is being passed, and (if `yobitsugi install-scanners` is needed first) the install commands that will run. After approval, exit plan mode and run yobitsugi. Apply this in plan mode for **`yobitsugi run`** and for **`yobitsugi install-scanners`** — both have side effects. `yobitsugi scan` (read-only) does not need plan mode.
+
 ## How the assistant should respond after a run
 
 When the user invokes this skill, the assistant should:
 
 1. Run `yobitsugi` with the user's arguments.
-2. Read `findings.json` and `validation.json` from the workspace.
-3. Summarise in plain prose: how many findings, by severity and type; how many fixes applied vs skipped vs `CANNOT_FIX`; what the re-scan said.
-4. **Lead with the validation result.** If `newly_introduced` is non-empty, flag it loudly — those need human review.
-5. Don't paste large JSON in the chat. Point to the workspace path for raw outputs.
-6. Don't auto-apply fixes unless the user explicitly asked.
+2. Read `findings.json`, `validation.json`, **and `scan_report.json`** from the workspace.
+3. **Render the structured summary in chat.** Run `yobitsugi summary <workspace> --format markdown` and surface the output verbatim — it contains five markdown tables (Run totals, Findings by severity, Findings, Missing scanners, What next?) which most clients render natively. If markdown tables don't render in the user's client, fall back to `--format json` and rebuild the same tables yourself.
+4. **Check `scan_report.json` for `status: "skipped_missing_tool"` entries.** If any exist, before summarising findings:
+   - Tell the user *which* scanners were skipped and why (binary not installed).
+   - Split them into auto-installable (those with `install_method: "pip"`) and manual (everything else, which carries an `install_hint` field).
+   - Ask the user: *"X scanners aren't installed (semgrep, bandit, …). Want me to install the auto-installable ones into yobitsugi's isolated venv (`yobitsugi install-scanners`), and/or run the install commands for the manual ones?"*
+   - If they say yes to the auto-installable group, run `yobitsugi install-scanners` and then re-run the original `yobitsugi` command.
+   - If they say yes to the manual ones, run the `install_hint` commands one at a time (each is a single shell command). Confirm before re-running yobitsugi.
+   - If they decline, proceed to step 4 against whatever findings were collected — make clear that the picture is partial.
+5. **Lead with the validation result.** If `newly_introduced` is non-empty, flag it loudly — those need human review. The summary's "Newly introduced" section is already styled prominently; quote it.
+6. **Present the "What next?" table as a choice menu** and ask the user which row to act on. Example:
+   *"I see 3 next-action options — 1) install missing scanners, 2) accept and git-commit, 3) re-scan only. Which would you like?"* Then run the corresponding command from the table.
+7. Don't paste raw JSON in the chat unless the user asks. Point to the workspace path for inspection.
+8. Don't auto-apply fixes (and don't run installs) without explicit confirmation from the user.
+
+### Scanner installation, in detail
+
+`yobitsugi install-scanners` creates and manages an isolated venv at `~/.yobitsugi/tools/venv/`. It only handles Python-installable scanners (bandit, safety, pip-audit, semgrep, flawfinder) — installing them there never touches the user's main Python environment. After install, the venv's `bin/` is auto-prepended to `PATH` for every scanner subprocess, so `yobitsugi scan` / `yobitsugi run` find the tools without further configuration.
+
+For non-Python scanners (eslint via npm, gosec via go install, brakeman via gem, shellcheck via brew/apt, etc.), the assistant should use its own shell tool to run the install commands. They're not in yobitsugi's sandbox because each one needs a different runtime that's outside Python's scope.
+
+`yobitsugi list-scanners` prints the full table (method, installed status, package or hint) — useful when the user asks "what *can* yobitsugi run?"
+`yobitsugi uninstall-scanners` wipes `~/.yobitsugi/tools/` entirely.
 
 ## Extension points
 

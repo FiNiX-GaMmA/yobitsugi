@@ -88,6 +88,10 @@ def run_pipeline(
     _step("validate")
     validate.main(["--workspace", str(workspace), "--root", str(root)])
 
+    # Final detailed report (tables: findings × fixes × validation × next actions).
+    from yobitsugi.core import summary as summary_mod
+    summary_mod.render(workspace, mode="rich")
+
     print(f"\n[run] done. See {workspace}/ for everything.")
     return 0
 

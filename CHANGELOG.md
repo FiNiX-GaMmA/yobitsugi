@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Fixed
+- **`npx yobitsugi <args>` now works.** The npm wrapper at `npm/` was never being published to the npm registry, so `npx yobitsugi install` failed with a 404 from `registry.npmjs.org`. A new `publish-npm` job in the release workflow ships the wrapper alongside every PyPI release. Requires an `NPM_TOKEN` repository secret; the job is auto-skipped (with a warning) if the secret isn't present, so adding npm publishing later is a one-secret change without touching the workflow.
+- **Codex slash-command picker now shows a proper title + description** instead of `prompts:yobitsugi`. The Codex installer prepends YAML frontmatter (`name`, `description`, `trigger`) to the bundled slash-command template — matching the pattern used by other Codex-compatible skills like graphify.
+- **Codex plan-mode entry in SKILL.md corrected.** Codex *does* support a planning workflow (per https://developers.openai.com/codex/learn/best-practices) via its `approval_mode` setting + plan-first message convention. The SKILL.md table now points assistants at the correct mechanism rather than telling them to fall back to plain chat.
+- npm wrapper's Python-version error message bumped from `3.10+` to `3.11+` to match the actual package requirement, and now includes Windows install instructions plus a fall-through hint pointing at `pipx install yobitsugi` for users who don't want npm at all.
+
+### Added
+- **Tabular post-run summary.** New `yobitsugi summary <workspace>` subcommand renders findings, fix outcomes, validation deltas, missing scanners, and a ranked next-action menu as five tables. Three output modes:
+  - `--format rich` (default) — colored terminal tables via the `rich` library.
+  - `--format markdown` — copy-pasteable markdown tables for AI assistants to surface in chat.
+  - `--format json` — structured data, same shape as the rendered tables, for tooling.
+  The summary is auto-rendered at the end of every `yobitsugi run` and `yobitsugi scan` — no separate invocation needed.
+- **Plan-mode instructions for AI assistants.** SKILL.md now explicitly tells assistants that support a plan/dry-run mode (Claude Code, Cursor agent mode) to enter it before invoking `yobitsugi run` or `yobitsugi install-scanners` — both have side effects. Assistants without plan mode are instructed to write the plan as a chat message and wait for user approval.
+- 23 new pytest cases in `tests/test_summary.py` covering aggregation, action ranking, markdown formatting, and pipe-character escaping inside table cells. Total suite now 192 tests.
+
+### Changed
+- README badge URLs adjusted (dropped `.svg` suffix, added `cacheSeconds=3600`) to force GitHub's camo image proxy to re-fetch — fixes "package or version not found" displays that lingered after the first PyPI publish.
+- Downloads badge switched from `pypi/dm` to `static.pepy.tech/badge/yobitsugi/month` for faster post-publish updates.
+
+### Added
+- **Isolated scanner installation.** New `yobitsugi install-scanners` / `uninstall-scanners` / `list-scanners` subcommands. The first creates an isolated venv at `~/.yobitsugi/tools/venv/` and `pip install`s every missing Python-based scanner (bandit, safety, pip-audit, semgrep, flawfinder) into it — your main Python environment is never touched. Future runs of `yobitsugi scan` / `yobitsugi run` automatically prepend the venv's `bin/` to `PATH` for scanner subprocesses, so installed tools are found without any further setup.
+- New `yobitsugi/core/tools.py` module managing the venv (creation, install, manifest, PATH wiring).
+- Each entry in `yobitsugi/data/scanners.yaml` now carries an `install:` block (`method`, `package`, `hint`) so non-Python scanners surface canonical install instructions instead of being silently absent.
+- `scan_report.json` entries for missing tools now include `install_method` / `install_package` / `install_hint` fields so the calling AI assistant can decide how to bootstrap each.
+- After every scan, the CLI prints a missing-tool summary that separates auto-installable scanners (with the exact `yobitsugi install-scanners` command) from manual ones (with their `install_hint`).
+- 27 new pytest cases in `tests/test_tools.py` plus 5 in `tests/test_cli.py` covering registry parsing, install-plan computation, venv detection, PATH prepending, manifest round-trips, and the new subcommands. Total suite now 174 tests.
+- SKILL.md updated so AI assistants invoking `/yobitsugi` proactively detect skipped scanners and ask the user whether to install them.
+
 ### Changed
 - **Release policy: every push to `main` is now a release.** The publish workflow's `prep` job finds the latest `vX.Y.Z` tag, increments the patch component, and creates the next tag automatically. No more manual version bumps in `pyproject.toml` or `yobitsugi/__init__.py`.
 - **Versioning moved to `hatch-vcs`.** `pyproject.toml` declares `dynamic = ["version"]`; the version is read from the latest git tag at build/install time. `yobitsugi/__init__.py` imports `__version__` from a generated `yobitsugi/_version.py` (gitignored — hatch-vcs writes it).

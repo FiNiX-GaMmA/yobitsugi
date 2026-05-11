@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ except ImportError:
     sys.stderr.write("PyYAML is required: pip install pyyaml\n")
     sys.exit(2)
 
+from yobitsugi.core import tools
 
 PKG_ROOT = Path(__file__).resolve().parent.parent
 SCANNERS_YAML = PKG_ROOT / "data" / "scanners.yaml"
@@ -38,11 +40,15 @@ def load_registry() -> dict:
         return yaml.safe_load(f)
 
 
-def have_tool(binary: str) -> bool:
-    return shutil.which(binary) is not None
+def have_tool(binary: str, env: dict[str, str] | None = None) -> bool:
+    """`which`-equivalent that respects an overridden PATH (so we see venv tools)."""
+    path = (env or os.environ).get("PATH")
+    return shutil.which(binary, path=path) is not None
 
 
-def run_one(scanner: dict, root: Path, raw_dir: Path) -> dict:
+def run_one(
+    scanner: dict, root: Path, raw_dir: Path, env: dict[str, str] | None = None,
+) -> dict:
     """Run a single scanner. Return a small report dict capturing exit/where output went."""
     name = scanner["name"]
     binary = scanner["binary"]
@@ -50,8 +56,16 @@ def run_one(scanner: dict, root: Path, raw_dir: Path) -> dict:
     out_kind = scanner.get("output", "json")
     out_file = raw_dir / f"{name}.{out_kind if out_kind != 'inline_stdout' else 'txt'}"
 
-    if not have_tool(binary):
-        return {"name": name, "status": "skipped_missing_tool", "binary": binary}
+    if not have_tool(binary, env):
+        report = {"name": name, "status": "skipped_missing_tool", "binary": binary}
+        install = scanner.get("install") or {}
+        if install:
+            report["install_method"] = install.get("method", "manual")
+            if install.get("package"):
+                report["install_package"] = install["package"]
+            if install.get("hint"):
+                report["install_hint"] = install["hint"]
+        return report
 
     cmd = cmd_template.format(root=str(root), out=str(out_file))
     try:
@@ -62,6 +76,7 @@ def run_one(scanner: dict, root: Path, raw_dir: Path) -> dict:
             text=True,
             timeout=scanner.get("timeout", 600),
             cwd=str(root),
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return {"name": name, "status": "timeout"}
@@ -124,11 +139,17 @@ def main(argv: list[str] | None = None) -> int:
         print("[scan] no scanners matched detected languages")
         return 0
 
+    # Prepend the yobitsugi-managed venv (if it exists) to PATH so scanners
+    # installed via `yobitsugi install-scanners` are visible to subprocesses.
+    env = tools.prepend_to_path()
+
     print(f"[scan] running {len(to_run)} scanners against {args.root}")
+    if tools.venv_exists():
+        print(f"[scan] managed venv: {tools.VENV_DIR}")
     reports = []
     for s in to_run:
         print(f"  - {s['name']:<14}", end=" ", flush=True)
-        rep = run_one(s, args.root, raw_dir)
+        rep = run_one(s, args.root, raw_dir, env=env)
         print(rep["status"])
         reports.append(rep)
 
@@ -141,6 +162,32 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(summary, indent=2), encoding="utf-8"
     )
     print(f"[scan] wrote {args.workspace / 'scan_report.json'}")
+
+    # ---- Summarise missing tools so the assistant / user can act on it ----
+    missing = [r for r in reports if r["status"] == "skipped_missing_tool"]
+    if missing:
+        auto_installable = [r for r in missing if r.get("install_method") == "pip"]
+        manual = [r for r in missing if r.get("install_method") != "pip"]
+
+        print(f"\n[scan] {len(missing)} scanner(s) skipped — binary not found:")
+        for r in missing:
+            method = r.get("install_method", "manual")
+            print(f"  - {r['name']:<14}  install method: {method}")
+
+        if auto_installable:
+            names = ", ".join(r["name"] for r in auto_installable)
+            print(
+                f"\n[scan] {len(auto_installable)} of these are auto-installable into "
+                f"yobitsugi's isolated venv:"
+            )
+            print(f"       {names}")
+            print("       Run:  yobitsugi install-scanners")
+        if manual:
+            print(f"\n[scan] {len(manual)} need a runtime yobitsugi can't manage:")
+            for r in manual:
+                hint = r.get("install_hint") or f"see install method: {r.get('install_method')}"
+                print(f"       - {r['name']:<14}  {hint}")
+
     return 0
 
 

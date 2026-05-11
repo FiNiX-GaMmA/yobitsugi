@@ -7,101 +7,165 @@
 #       command: 'scanner ... -o {out}'   # {root} = repo, {out} = output path
 #       output: json                 # 'json' | 'xml' | 'txt' | 'inline_stdout'
 #       timeout: 600                 # Seconds, optional. Default 600.
+#       install:                     # Installation metadata
+#         method: pip                # pip | npm | go | gem | cargo | system | manual
+#         package: scanner_name      # Package name on the registry (pip/npm/cargo/etc.)
+#         hint: "brew install x"     # Human-readable command for manual installs
 #
 # If `output: inline_stdout`, run_scanners.py captures stdout into {out} for you.
-# Use this for tools that don't have a write-to-file flag.
-#
 # The _cross_language section runs regardless of detected languages.
+#
+# `install.method: pip` tools are auto-installable into yobitsugi's isolated venv at
+# ~/.yobitsugi/tools/venv/ via `yobitsugi install-scanners`. Other methods (npm/go/etc.)
+# are printed as install hints; the user runs them in their own runtime sandbox.
 
 Python:
   - name: bandit
     binary: bandit
     command: 'bandit -r {root} -f json -o {out} || true'
     output: json
+    install:
+      method: pip
+      package: bandit
   - name: safety
     binary: safety
     command: 'safety check --json --output {out} || true'
     output: json
+    install:
+      method: pip
+      package: safety
   - name: pip-audit
     binary: pip-audit
     command: 'pip-audit --format json --output {out} || true'
     output: json
+    install:
+      method: pip
+      package: pip-audit
 
 JavaScript:
   - name: eslint
     binary: eslint
     command: 'eslint --ext .js,.jsx,.mjs,.cjs --format json -o {out} {root} || true'
     output: json
+    install:
+      method: npm
+      package: eslint
+      hint: "npm install -g eslint eslint-plugin-security"
   - name: npm-audit
     binary: npm
     command: 'npm audit --json > {out} || true'
     output: inline_stdout
+    install:
+      method: system
+      hint: "ships with Node.js — install Node from https://nodejs.org/"
 
 TypeScript:
   - name: eslint
     binary: eslint
     command: 'eslint --ext .ts,.tsx --format json -o {out} {root} || true'
     output: json
+    install:
+      method: npm
+      package: eslint
+      hint: "npm install -g eslint eslint-plugin-security @typescript-eslint/parser"
 
 Java:
   - name: spotbugs
     binary: spotbugs
     command: 'spotbugs -textui -xml:withMessages -output {out} {root} || true'
     output: xml
+    install:
+      method: manual
+      hint: "download from https://spotbugs.github.io/ and add to PATH"
 
 Go:
   - name: gosec
     binary: gosec
     command: 'gosec -fmt json -out {out} ./... || true'
     output: json
+    install:
+      method: go
+      package: github.com/securego/gosec/v2/cmd/gosec@latest
+      hint: "go install github.com/securego/gosec/v2/cmd/gosec@latest"
   - name: govulncheck
     binary: govulncheck
     command: 'govulncheck -json ./... > {out} || true'
     output: inline_stdout
+    install:
+      method: go
+      package: golang.org/x/vuln/cmd/govulncheck@latest
+      hint: "go install golang.org/x/vuln/cmd/govulncheck@latest"
 
 Ruby:
   - name: brakeman
     binary: brakeman
     command: 'brakeman -q --format json -o {out} {root} || true'
     output: json
+    install:
+      method: gem
+      package: brakeman
+      hint: "gem install brakeman"
   - name: bundler-audit
     binary: bundler-audit
     command: 'bundler-audit check --format json --output {out} || true'
     output: json
+    install:
+      method: gem
+      package: bundler-audit
+      hint: "gem install bundler-audit"
 
 PHP:
   - name: phpstan
     binary: phpstan
     command: 'phpstan analyse --error-format=json --no-progress > {out} || true'
     output: inline_stdout
+    install:
+      method: manual
+      hint: "composer global require phpstan/phpstan"
 
 C:
   - name: flawfinder
     binary: flawfinder
     command: 'flawfinder --minlevel=2 --columns --dataonly --singleline {root} > {out} || true'
     output: inline_stdout
+    install:
+      method: pip
+      package: flawfinder
 
 "C++":
   - name: flawfinder
     binary: flawfinder
     command: 'flawfinder --minlevel=2 --columns --dataonly --singleline {root} > {out} || true'
     output: inline_stdout
+    install:
+      method: pip
+      package: flawfinder
   - name: cppcheck
     binary: cppcheck
     command: 'cppcheck --enable=warning,style,performance --xml --xml-version=2 {root} 2> {out} || true'
     output: inline_stdout
+    install:
+      method: system
+      hint: "macOS: brew install cppcheck  |  Debian/Ubuntu: apt install cppcheck"
 
 Rust:
   - name: cargo-audit
     binary: cargo
     command: 'cargo audit --json > {out} || true'
     output: inline_stdout
+    install:
+      method: cargo
+      package: cargo-audit
+      hint: "cargo install cargo-audit"
 
 Shell:
   - name: shellcheck
     binary: shellcheck
     command: 'find {root} -name "*.sh" -print0 | xargs -0 -r shellcheck -f json1 > {out} || true'
     output: inline_stdout
+    install:
+      method: system
+      hint: "macOS: brew install shellcheck  |  Debian/Ubuntu: apt install shellcheck"
 
 _cross_language:
   - name: semgrep
@@ -109,7 +173,13 @@ _cross_language:
     command: 'semgrep --config=auto --json -o {out} {root} || true'
     output: json
     timeout: 1200
+    install:
+      method: pip
+      package: semgrep
   - name: trufflehog
     binary: trufflehog
     command: 'trufflehog filesystem --json --no-update {root} > {out} || true'
     output: inline_stdout
+    install:
+      method: manual
+      hint: "macOS: brew install trufflehog  |  Linux: see https://github.com/trufflesecurity/trufflehog"
