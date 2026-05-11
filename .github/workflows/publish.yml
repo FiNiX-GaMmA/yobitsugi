@@ -21,6 +21,11 @@ on:
     types: [published]
   workflow_dispatch:
 
+# Opt JS actions onto Node 24 ahead of the June 2026 forced cutover.
+# See: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   # ------------------------------------------------------------------------
   # 1. Decide what (if anything) this run should release.

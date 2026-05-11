@@ -14,13 +14,16 @@
 [![PyPI version](https://img.shields.io/pypi/v/yobitsugi.svg)](https://pypi.org/project/yobitsugi/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/yobitsugi.svg)](https://pypi.org/project/yobitsugi/)
 [![Python versions](https://img.shields.io/pypi/pyversions/yobitsugi.svg)](https://pypi.org/project/yobitsugi/)
-[![License](https://img.shields.io/pypi/l/yobitsugi.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/pypi/l/yobitsugi.svg)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/FiNiX-GaMmA/yobitsugi?style=flat&color=yellow)](https://github.com/FiNiX-GaMmA/yobitsugi/stargazers)
+[![GitHub followers](https://img.shields.io/github/followers/FiNiX-GaMmA?label=Follow%20%40FiNiX-GaMmA&style=flat&color=blue)](https://github.com/FiNiX-GaMmA)
 
 [![CI](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml/badge.svg)](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml)
-[![Publish](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml/badge.svg)](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml)
+[![Release & Publish](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml/badge.svg)](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![Type-checked: mypy](https://img.shields.io/badge/type--checked-mypy-1f5082.svg)](http://mypy-lang.org/)
 [![Tests: pytest](https://img.shields.io/badge/tests-pytest-0A9EDC.svg)](https://docs.pytest.org/)
+
 
 </div>
 
