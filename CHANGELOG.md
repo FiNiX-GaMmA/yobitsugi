@@ -2,11 +2,12 @@
 
 ## Unreleased
 
+### Removed
+- **npm installation path dropped entirely.** The `npm/` wrapper directory, the `publish-npm` job in `publish.yml`, the `NPM_TOKEN` secret requirement, and every `npx yobitsugi <args>` reference in README / SKILL.md are gone. Python remains the only supported install path: `pipx install yobitsugi`, `uv tool install yobitsugi`, or `pip install yobitsugi`. Mentions of `npm audit` and `eslint`-via-npm are unchanged — those refer to the *scanner* ecosystem yobitsugi orchestrates against Node projects, not to how yobitsugi itself is installed.
+
 ### Fixed
-- **`npx yobitsugi <args>` now works.** The npm wrapper at `npm/` was never being published to the npm registry, so `npx yobitsugi install` failed with a 404 from `registry.npmjs.org`. A new `publish-npm` job in the release workflow ships the wrapper alongside every PyPI release. Requires an `NPM_TOKEN` repository secret; the job is auto-skipped (with a warning) if the secret isn't present, so adding npm publishing later is a one-secret change without touching the workflow.
-- **Codex slash-command picker now shows a proper title + description** instead of `prompts:yobitsugi`. The Codex installer prepends YAML frontmatter (`name`, `description`, `trigger`) to the bundled slash-command template — matching the pattern used by other Codex-compatible skills like graphify.
+- **Codex slash-command picker now shows a proper title + description** instead of `prompts:yobitsugi`. The Codex installer prepends YAML frontmatter (`name`, `description`, `trigger`) to the bundled slash-command template, matching the pattern used by other Codex-compatible skills like graphify.
 - **Codex plan-mode entry in SKILL.md corrected.** Codex *does* support a planning workflow (per https://developers.openai.com/codex/learn/best-practices) via its `approval_mode` setting + plan-first message convention. The SKILL.md table now points assistants at the correct mechanism rather than telling them to fall back to plain chat.
-- npm wrapper's Python-version error message bumped from `3.10+` to `3.11+` to match the actual package requirement, and now includes Windows install instructions plus a fall-through hint pointing at `pipx install yobitsugi` for users who don't want npm at all.
 
 ### Added
 - **Tabular post-run summary.** New `yobitsugi summary <workspace>` subcommand renders findings, fix outcomes, validation deltas, missing scanners, and a ranked next-action menu as five tables. Three output modes:

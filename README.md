@@ -12,7 +12,6 @@
 <div align="center">
 
 [![PyPI version](https://img.shields.io/pypi/v/yobitsugi?label=pypi&color=blue&cacheSeconds=3600)](https://pypi.org/project/yobitsugi/)
-[![PyPI downloads](https://static.pepy.tech/badge/yobitsugi/month)](https://pepy.tech/project/yobitsugi)
 [![Python versions](https://img.shields.io/pypi/pyversions/yobitsugi?color=blue&cacheSeconds=3600)](https://pypi.org/project/yobitsugi/)
 [![License: MIT](https://img.shields.io/pypi/l/yobitsugi?color=green&cacheSeconds=3600)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/FiNiX-GaMmA/yobitsugi?style=flat&color=yellow&cacheSeconds=3600)](https://github.com/FiNiX-GaMmA/yobitsugi/stargazers)
@@ -114,13 +113,6 @@ pipx install yobitsugi && yobitsugi install
 uv tool install yobitsugi && yobitsugi install
 # or
 pip install yobitsugi && yobitsugi install
-```
-
-For JS-native users (still needs Python 3.11+ available somewhere):
-
-```bash
-npx yobitsugi install
-# the npm package is a thin shim that delegates to `uvx yobitsugi`
 ```
 
 Or drop the repo in directly as a Claude Code skill:

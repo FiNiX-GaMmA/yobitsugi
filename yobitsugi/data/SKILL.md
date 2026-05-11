@@ -37,7 +37,6 @@ The skill ships as the `yobitsugi` CLI. Install it with any of:
 pipx install yobitsugi          # or: uv tool install yobitsugi
 pip install yobitsugi
 uvx yobitsugi <args>            # ephemeral, no install
-npx yobitsugi <args>            # ephemeral, no install, JS users
 ```
 
 Then in chat the user types `/yobitsugi <path>`, which expands to:
