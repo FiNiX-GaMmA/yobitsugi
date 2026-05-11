@@ -45,10 +45,9 @@ Changelog = "https://github.com/FiNiX-GaMmA/yobitsugi/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["yobitsugi"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"yobitsugi/data" = "yobitsugi/data"
-"yobitsugi/templates" = "yobitsugi/templates"
+# Note: hatch includes all non-Python files (yobitsugi/data/*, yobitsugi/templates/*)
+# under the package directory by default. Do NOT add force-include here — it would
+# duplicate every entry and PyPI rejects wheels with duplicate ZIP entries.
 
 [tool.hatch.build.targets.sdist]
 include = [
