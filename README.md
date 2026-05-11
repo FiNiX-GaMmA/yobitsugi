@@ -389,43 +389,54 @@ Configuration lives in [`pyproject.toml`](pyproject.toml) under `[tool.pytest.in
 
 ## Releasing
 
-**Auto-tagging, GitHub Release creation, and PyPI publishing are all automated** by [`.github/workflows/publish.yml`](.github/workflows/publish.yml). The day-to-day flow is:
+> **Release policy: every push to `main` is a release.** The workflow finds the latest `vX.Y.Z` tag, bumps the patch component, creates the new tag, builds, and publishes to both GitHub Releases and PyPI. There is no separate "version bump" step — version metadata lives in git tags, not in source files.
 
-1. Bump `version` in [`pyproject.toml`](pyproject.toml) **and** `__version__` in [`yobitsugi/__init__.py`](yobitsugi/__init__.py) to the new version.
-2. Move the items under `## Unreleased` in [CHANGELOG.md](CHANGELOG.md) into a new `## <version>` section.
-3. Commit and push to `main`.
+This is wired through [`hatch-vcs`](https://github.com/ofek/hatch-vcs): at build time, the package's version is read from the latest git tag. `pyproject.toml` declares `dynamic = ["version"]` rather than a static value; `yobitsugi/__init__.py` reads `__version__` from a generated `yobitsugi/_version.py` (the file is gitignored — hatch-vcs writes it during `pip install` / `python -m build`).
 
-   ```bash
-   git commit -am "Release 0.1.1"
-   git push origin main
-   ```
+### Day-to-day flow
 
-That's it. The workflow takes over from here:
+```bash
+git commit -m "Fix the thing"
+git push origin main
+```
 
-- Notices the new version in `pyproject.toml`.
-- Verifies `yobitsugi/__init__.py` matches.
-- Creates and pushes a `v<version>` git tag.
-- Builds an sdist + wheel from that tagged commit, validates with `twine check --strict`.
-- Creates a GitHub Release at `/releases` with the wheel + sdist attached and notes pulled from the matching `## <version>` section of CHANGELOG.md (falls back to auto-generated notes from commits).
-- Uploads the same artifacts to https://pypi.org/project/yobitsugi/ through the gated `pypi` environment.
+That's the whole release procedure. The workflow takes over:
+
+1. **prep** — finds the latest `vX.Y.Z` tag (e.g. `v0.1.4`), computes the next patch (`v0.1.5`).
+2. **tag** — creates and pushes `v0.1.5`.
+3. **build** — checks out at `v0.1.5`, builds an sdist + wheel; hatch-vcs stamps the artifacts as `0.1.5`. Validates with `twine check --strict`.
+4. **release** — creates a GitHub Release at `/releases` with the wheel + sdist attached and notes pulled from the matching `## 0.1.5` section of [CHANGELOG.md](CHANGELOG.md) (falls back to auto-generated notes from commits).
+5. **publish** — uploads to https://pypi.org/project/yobitsugi/ through the gated `pypi` environment.
 
 ### Workflow jobs
 
 | Job | When it runs | What it does |
 | --- | --- | --- |
-| `prep` | Always | Decides whether this push should release anything. Reads the version from `pyproject.toml`, compares against existing tags. |
-| `tag` | Only when `pyproject.toml`'s version has no matching tag yet | Verifies `yobitsugi/__init__.py` agrees, then creates and pushes `v<version>`. |
-| `build` | Whenever `prep` says to release | sdist + wheel + `twine check --strict`. |
-| `release` | Whenever `prep` says to release (skipped if a GitHub Release already triggered the run) | Creates the GitHub Release with notes + assets. `-rc` / `-alpha` / `-beta` tags are marked as pre-releases. |
-| `publish` | Whenever `prep` says to release | Uploads to PyPI through the `pypi` environment. |
+| `prep` | Always | Computes the next tag (latest `vX.Y.Z` + 1 patch). |
+| `tag` | Always (skipped only when a `v*` tag was pushed directly) | Creates and pushes the new tag. |
+| `build` | After `tag` succeeds | sdist + wheel via `hatch-vcs`, validated with `twine check --strict`. |
+| `release` | After `build` (skipped on `release: published` events) | Creates the GitHub Release with notes + assets. Tags containing `-rc`, `-alpha`, or `-beta` are marked as pre-releases. |
+| `publish` | After `build` | Uploads to PyPI through the `pypi` environment. |
 
-### Alternative triggers
+### Bumping minor or major
 
-You can still cut a release manually if you prefer:
+The workflow only auto-bumps the patch component. To cut a minor or major release, push the tag manually:
 
-- **Tag push**: `git tag v0.1.1 && git push origin v0.1.1`. The `tag` job is skipped (tag already exists); everything else runs.
-- **GitHub UI release**: publish a release via the web UI. `tag` and `release` jobs are skipped; `publish` runs to push to PyPI.
-- **`workflow_dispatch`**: trigger it from the Actions tab. Uses the version currently in `pyproject.toml`.
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The `tag` job is skipped (tag already exists), `prep` picks up that exact tag, everything else runs.
+
+### Trade-offs of this model
+
+- **Every push burns a PyPI version number.** Even a typo fix in the README publishes a new release. PyPI versions are immutable.
+- **Version numbers have no semantic meaning.** `0.1.47` just means "the 47th push since `v0.1.0`," not "47 patch-level fixes."
+- **Every push costs ~2 minutes of CI.**
+- **Upside:** zero release ceremony. Push and you've shipped.
+
+If those trade-offs stop making sense, switch the `prep` job back to "release only when pyproject.toml's version is new" — the prior model. The relevant section is roughly 15 lines.
 
 ### Required secrets
 

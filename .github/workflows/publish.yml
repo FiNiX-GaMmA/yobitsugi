@@ -1,17 +1,15 @@
 name: Release & Publish
 
-# Three ways this workflow fires a release:
+# Release policy: EVERY push to main is a release.
 #
-# 1. Someone bumps `version` in pyproject.toml on `main`. The `prep` job notices the
-#    new version doesn't have a matching tag yet, `tag` creates and pushes the tag,
-#    then `build` / `release` / `publish` run against that tag.
+# - prep    finds the latest vX.Y.Z tag, computes the next patch (vX.Y.{Z+1}).
+# - tag     creates and pushes that tag.
+# - build   uses hatch-vcs to read the new tag → wheel/sdist metadata version.
+# - release creates the GitHub Release with the artifacts attached.
+# - publish uploads to PyPI.
 #
-# 2. Someone pushes a `v*` tag directly. `tag` is skipped, everything else runs.
-#
-# 3. A maintainer publishes a release in the GitHub UI. `tag` is skipped, `release`
-#    is skipped (release already exists), only `publish` runs (to PyPI).
-#
-# `workflow_dispatch` runs the same logic against the current state of `main`.
+# A direct `v*` tag push or a `release: published` event also runs the downstream jobs.
+# `workflow_dispatch` behaves like a main push.
 
 on:
   push:
@@ -47,9 +45,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          file_version=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/.*"(.+)".*/\1/')
+
+          # Find the latest existing vX.Y.Z tag. Falls back to v0.0.0 if there are none.
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          latest="${latest:-v0.0.0}"
+          echo "Latest existing tag: $latest"
+
+          # Strip the leading v, split into MAJOR/MINOR/PATCH.
+          IFS='.' read -r major minor patch <<< "${latest#v}"
+          next_patch=$((patch + 1))
+          computed_tag="v${major}.${minor}.${next_patch}"
+          computed_version="${major}.${minor}.${next_patch}"
 
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # Direct tag push: use the tag verbatim, don't try to re-tag.
             tag="${GITHUB_REF#refs/tags/}"
             version="${tag#v}"
             echo "Direct tag push: $tag"
@@ -57,25 +66,13 @@ jobs:
             echo "needs_tag=false" >> "$GITHUB_OUTPUT"
             echo "version=$version" >> "$GITHUB_OUTPUT"
             echo "tag=$tag"        >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
-            tag="v$file_version"
-            if git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
-              echo "Tag $tag already exists — no new release on this push."
-              echo "release=false"   >> "$GITHUB_OUTPUT"
-              echo "needs_tag=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "Version bumped to $file_version on main — will tag as $tag."
-              echo "release=true"    >> "$GITHUB_OUTPUT"
-              echo "needs_tag=true"  >> "$GITHUB_OUTPUT"
-              echo "version=$file_version" >> "$GITHUB_OUTPUT"
-              echo "tag=$tag"        >> "$GITHUB_OUTPUT"
-            fi
           else
-            echo "Triggered by $GITHUB_EVENT_NAME — using pyproject.toml version."
+            # Main push, release: published, or workflow_dispatch → auto-bump patch.
+            echo "Auto-bumping: $latest → $computed_tag"
             echo "release=true"    >> "$GITHUB_OUTPUT"
-            echo "needs_tag=false" >> "$GITHUB_OUTPUT"
-            echo "version=$file_version" >> "$GITHUB_OUTPUT"
-            echo "tag=v$file_version" >> "$GITHUB_OUTPUT"
+            echo "needs_tag=true"  >> "$GITHUB_OUTPUT"
+            echo "version=$computed_version" >> "$GITHUB_OUTPUT"
+            echo "tag=$computed_tag"         >> "$GITHUB_OUTPUT"
           fi
 
   # ------------------------------------------------------------------------
@@ -93,16 +90,6 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
-
-      - name: Verify yobitsugi/__init__.py version matches pyproject.toml
-        shell: bash
-        run: |
-          init=$(grep -E '__version__ = ' yobitsugi/__init__.py | sed -E 's/.*"(.+)".*/\1/')
-          if [ "$init" != "${{ needs.prep.outputs.version }}" ]; then
-            echo "::error::Version mismatch — pyproject.toml says ${{ needs.prep.outputs.version }} but yobitsugi/__init__.py says $init. Bump both, then push again."
-            exit 1
-          fi
-          echo "Version match confirmed: ${{ needs.prep.outputs.version }}"
 
       - name: Create + push tag
         shell: bash

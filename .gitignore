@@ -106,6 +106,9 @@ secrets.yaml
 api_keys.txt
 *.token
 
+# ---------- Hatch-vcs generated ----------
+yobitsugi/_version.py
+
 # ---------- Yobitsugi runtime artifacts ----------
 # Workspaces created by `yobitsugi run` / `yobitsugi scan`
 .yobitsugi/

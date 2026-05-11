@@ -3,6 +3,22 @@
 ## Unreleased
 
 ### Changed
+- **Release policy: every push to `main` is now a release.** The publish workflow's `prep` job finds the latest `vX.Y.Z` tag, increments the patch component, and creates the next tag automatically. No more manual version bumps in `pyproject.toml` or `yobitsugi/__init__.py`.
+- **Versioning moved to `hatch-vcs`.** `pyproject.toml` declares `dynamic = ["version"]`; the version is read from the latest git tag at build/install time. `yobitsugi/__init__.py` imports `__version__` from a generated `yobitsugi/_version.py` (gitignored — hatch-vcs writes it).
+- The `tag` workflow job's "verify `__init__.py` matches `pyproject.toml`" check was removed (there's no longer a static version to check against).
+
+### Added
+- `hatch-vcs >= 0.4.0` as a build-system dependency.
+- Wheel `exclude` patterns for `.claude/`, `__pycache__/`, `*.pyc`, and `.DS_Store` so local-dev artifacts never ship to PyPI.
+
+### Note on trade-offs
+The new policy means every push — including docs-only fixes — burns a PyPI version number, and version numbers no longer carry semantic intent. To cut a minor or major release, push the tag manually (e.g. `git tag v0.2.0 && git push origin v0.2.0`); the workflow skips the auto-bump in that case.
+
+---
+
+## Earlier work this release cycle
+
+### Changed
 - **Python 3.11+ is now required.** Python 3.10 is no longer supported.
 - The pipeline orchestrator now runs **in-process**. Stages are imported and called as Python functions instead of being forked as subprocesses. Each stage is still a standalone CLI entrypoint, and the JSON-file workspace contract between stages is preserved.
 - `core.fix.generate_fix(finding, root, ...)` is now a public pure function that returns the diff string. `core.fix.main()` is a thin CLI wrapper around it.

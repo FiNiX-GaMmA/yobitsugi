@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.21.0"]
+requires = ["hatchling>=1.21.0", "hatch-vcs>=0.4.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "yobitsugi"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Scan any repo with SAST/SCA tools and patch the vulnerabilities using your AI assistant's LLM. Works as a slash command in Claude Code, Codex, Cursor, Gemini CLI, Aider, OpenCode, and GitHub Copilot CLI."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,11 +43,27 @@ Repository = "https://github.com/FiNiX-GaMmA/yobitsugi"
 Issues = "https://github.com/FiNiX-GaMmA/yobitsugi/issues"
 Changelog = "https://github.com/FiNiX-GaMmA/yobitsugi/blob/main/CHANGELOG.md"
 
+# Version is computed from the latest git tag (vX.Y.Z) at build time by hatch-vcs.
+# Every push to main → workflow auto-tags vX.Y.(Z+1) → wheel metadata picks up the new
+# version automatically. No manual edits to pyproject.toml or __init__.py are required.
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "yobitsugi/_version.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["yobitsugi"]
 # Note: hatch includes all non-Python files (yobitsugi/data/*, yobitsugi/templates/*)
 # under the package directory by default. Do NOT add force-include here — it would
 # duplicate every entry and PyPI rejects wheels with duplicate ZIP entries.
+exclude = [
+    "yobitsugi/.claude",
+    "yobitsugi/.claude/**",
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.DS_Store",
+]
 
 [tool.hatch.build.targets.sdist]
 include = [
