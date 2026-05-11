@@ -115,7 +115,7 @@ Note the workspace path printed at the top — you'll reuse it below.
 
 ---
 
-## Step 3 — render the summary, ask to proceed with fixes
+## Step 3 — render the summary
 
 Run:
 
@@ -128,16 +128,71 @@ Findings by severity, Findings, Missing scanners, What next?). If markdown
 tables don't render in the user's client, fall back to `--format json` and
 rebuild them.
 
-Then ask the user:
+**Yobitsugi never calls an LLM.** If you see an old version trying to reach
+out to OpenAI / Anthropic / Ollama and crashing on `model 'mistral' not
+found` or `ANTHROPIC_API_KEY missing`, the user is on a pre-1.0.0 release
+(the LLM layer was removed in 1.0). Tell them to upgrade
+(`pipx upgrade yobitsugi`) and continue with the rest of this runbook —
+you (the host AI assistant) are the LLM here. There is nothing to configure.
 
-> I found **N** findings (CRITICAL: x, HIGH: y, MEDIUM: z, LOW: w).
-> I'll attempt fixes for **CRITICAL and HIGH** by default
-> (override with `--severity ...`).
-> Shall I walk you through fixes one at a time?
+---
 
-Wait for explicit approval. If they say no, stop here — the workspace is
-preserved at the path you printed, and the temp venv has already been removed
+## Step 3.5 — present the "What next?" menu and ask
+
+The summary's last table — **What next?** — is the decision point. It
+contains a ranked list of actions yobitsugi computed from the scan, each
+with a `label`, a `command`, and a `why`. Typical rows you'll see:
+
+| Trigger | What the row says |
+| --- | --- |
+| Missing pip scanners (semgrep / bandit / pip-audit / safety / flawfinder skipped because the binary wasn't found) | "Install N missing Python scanner(s) (…) → `yobitsugi install-scanners`" |
+| Missing non-Python scanners (trufflehog / eslint / brakeman / shellcheck via system / etc.) | "Install N non-Python scanner(s) via their own runtime" with the exact brew / apt / npm / go-install hint |
+| CRITICAL/HIGH findings present | "Walk the host AI assistant through the N CRITICAL/HIGH finding(s) and apply fixes interactively" |
+| Always | "Re-scan to confirm the current state after applying fixes" |
+
+**Present those rows to the user as a numbered choice menu, then ask what
+to do.** Do NOT silently assume "the user wants the fix loop". Quote each
+row's `label` and `why` so the choice is informed. Example:
+
+> Here's where we are:
+>
+> 1. **Install 2 missing Python scanner(s)** (semgrep, bandit)
+>    → these scanners weren't on PATH, so their findings are missing from
+>    this report. Want me to install them with `yobitsugi install-scanners`
+>    and re-scan?
+> 2. **Walk through 12 CRITICAL/HIGH findings** and apply fixes interactively
+>    → for each finding, I'll explain the issue, propose a diff, and ask
+>    before applying.
+> 3. **Re-scan only** to confirm the current state, no fixes.
+>
+> Which would you like — one, two, three, or a different plan?
+
+Then branch on the answer:
+
+- **"Install missing scanners" / "1"** → run `yobitsugi install-scanners`
+  (auto-installs the pip scanners) and/or surface the non-pip install hints
+  for the user to run themselves (npm / brew / gem / go). After install,
+  re-run `yobitsugi scan <path> --ephemeral-tools --out <workspace>` against
+  the same workspace and re-render the summary. Then come back to Step 3.5.
+
+- **"Walk fixes" / "2"** → go to Step 4.
+
+- **"Re-scan only" / "3"** → re-run `yobitsugi scan <path> --ephemeral-tools
+  --out <workspace>` and compare ids (see Step 5's diff logic). Don't enter
+  the fix loop.
+
+- **"Something else"** → ask what they have in mind. The user might say
+  "only fix CRITICAL, skip HIGH" (filter your loop), "ignore the
+  not-my-code findings under `vendor/`" (filter by file), "just give me
+  the JSON for ticketing" (`yobitsugi findings <ws> --json`), or "stop".
+
+If they say "no" / "nothing" / "I'll handle it" — stop. The workspace is
+preserved at the path you printed; the temp venv was already removed
 (since `yobitsugi scan --ephemeral-tools` is a one-shot).
+
+If there are **zero CRITICAL/HIGH findings**, don't offer the fix loop —
+say something like *"no CRITICAL or HIGH findings; the MEDIUM/LOW list is
+in the report if you want to skim. Re-scan, skim findings, or stop?"*
 
 ---
 

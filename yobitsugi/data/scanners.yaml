@@ -49,17 +49,38 @@ Python:
       package: pip-audit
 
 JavaScript:
+  # If the target repo has its own eslint config (.eslintrc.*,
+  # eslint.config.{js,mjs,cjs}, or an `eslintConfig` block in package.json),
+  # eslint v8 picks it up automatically — no flag needed. If it has none, the
+  # `--resolve-plugins-relative-to` + bundled-config dance below falls back to
+  # the JSON config that ships with yobitsugi (data/eslint-security.eslintrc.json),
+  # which loads eslint-plugin-security with its recommended-legacy rule set.
+  # That guarantees a scan produces *something* even on a vanilla JS repo —
+  # the previous behaviour was to silently report "no findings" when the
+  # repo had no eslint config of its own.
   - name: eslint
     binary: eslint
-    command: 'eslint --ext .js,.jsx,.mjs,.cjs --format json -o {out} {root} || true'
+    command: |
+      sh -c '
+        if ls -1 {root}/.eslintrc.* {root}/eslint.config.* 2>/dev/null | head -1 | grep -q . \
+           || grep -l "\"eslintConfig\"" {root}/package.json 2>/dev/null | head -1 | grep -q .; then
+          eslint --ext .js,.jsx,.mjs,.cjs --format json -o {out} {root} || true
+        else
+          eslint \
+            --no-eslintrc \
+            --config "$YOBITSUGI_ESLINT_FALLBACK_CONFIG" \
+            --resolve-plugins-relative-to "$YOBITSUGI_NODE_MODULES_ROOT" \
+            --ext .js,.jsx,.mjs,.cjs --format json -o {out} {root} || true
+        fi
+      '
     output: json
     install:
       method: npm
       package: eslint
-      hint: "npm install -g eslint eslint-plugin-security"
+      hint: "auto-installed via npm in --ephemeral-tools when npm is on PATH; else: npm install -g eslint eslint-plugin-security"
   - name: npm-audit
     binary: npm
-    command: 'npm audit --json > {out} || true'
+    command: 'cd {root} && npm audit --json > {out} || true'
     output: inline_stdout
     install:
       method: system
@@ -68,12 +89,24 @@ JavaScript:
 TypeScript:
   - name: eslint
     binary: eslint
-    command: 'eslint --ext .ts,.tsx --format json -o {out} {root} || true'
+    command: |
+      sh -c '
+        if ls -1 {root}/.eslintrc.* {root}/eslint.config.* 2>/dev/null | head -1 | grep -q . \
+           || grep -l "\"eslintConfig\"" {root}/package.json 2>/dev/null | head -1 | grep -q .; then
+          eslint --ext .ts,.tsx --format json -o {out} {root} || true
+        else
+          eslint \
+            --no-eslintrc \
+            --config "$YOBITSUGI_ESLINT_FALLBACK_CONFIG" \
+            --resolve-plugins-relative-to "$YOBITSUGI_NODE_MODULES_ROOT" \
+            --ext .ts,.tsx --format json -o {out} {root} || true
+        fi
+      '
     output: json
     install:
       method: npm
       package: eslint
-      hint: "npm install -g eslint eslint-plugin-security @typescript-eslint/parser"
+      hint: "auto-installed via npm in --ephemeral-tools when npm is on PATH; else: npm install -g eslint eslint-plugin-security @typescript-eslint/parser"
 
 Java:
   - name: spotbugs

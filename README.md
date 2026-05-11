@@ -116,6 +116,7 @@ Auto-detected per language. Missing binaries are skipped, not fatal — most are
 | `flawfinder` | direct dep |
 | `shellcheck` | direct dep via [`shellcheck-py`](https://github.com/shellcheck-py/shellcheck-py) — the Haskell binary is wrapped in a Python wheel, so `pip` puts a real `shellcheck` executable on `PATH` |
 | `trufflehog` | **fetched on demand** when you pass `--ephemeral-tools`: the Go binary is downloaded from the official GitHub release into the same temp dir as the scanner venv, and is removed at the end of the run. No `brew install` step. See "Trufflehog" below for the persistent variant. |
+| `eslint` + `eslint-plugin-security` | **`npm install`ed on demand** when you pass `--ephemeral-tools` and the repo has JS/TS code. Drops into `<tmp>/node/node_modules/.bin/` next to the venv; cleaned up at the end of the run. Requires `npm` on the host (Node.js — yobitsugi can't bootstrap that). A bundled fallback eslint config is used when your repo has none of its own. See "ESLint" below. |
 
 Non-Python scanners that aren't ours to bundle — `eslint`, `npm audit`, `gosec`, `govulncheck`, `brakeman`, `bundler-audit`, `phpstan`, `cppcheck`, `cargo-audit`, `spotbugs` — need their own runtime (Node / Go / Ruby / etc.). `yobitsugi list-scanners` shows the install hint for each.
 
@@ -145,6 +146,23 @@ Output streams as scanners finish:
   ✓ semgrep         ok                     31.7s
 [scan] all scanners done in 31.7s
 ```
+
+### ESLint (JS / TypeScript)
+
+ESLint is a Node.js tool — no PyPI wrapper exists, so it can't go inside the Python venv. Same workaround as trufflehog: when `yobitsugi scan --ephemeral-tools` detects JavaScript or TypeScript in the repo, it `npm install`s `eslint@^8.57 eslint-plugin-security@^3 @typescript-eslint/parser@^7 @typescript-eslint/eslint-plugin@^7` into the temp tools dir (next to the Python venv) and adds the resulting `node_modules/.bin/` to `PATH` for the scan. The whole thing is cleaned up in the `finally` block.
+
+The only requirement on the host is `npm`. If it's not on PATH, yobitsugi prints an install hint (`brew install node` / `apt-get install nodejs npm` / nodejs.org) and the scan continues with eslint marked `skipped_missing_tool`. Node itself isn't auto-installable — it's a 100MB+ runtime that needs an OS-level package manager.
+
+If your repo already has an eslint config (`.eslintrc.*`, `eslint.config.{js,mjs,cjs}`, or an `eslintConfig` block in `package.json`), eslint uses it. If not, yobitsugi falls back to the bundled config at [`yobitsugi/data/eslint-security.eslintrc.json`](yobitsugi/data/eslint-security.eslintrc.json) — eslint v8 schema, loads `eslint-plugin-security/recommended-legacy`, with a TypeScript override that pulls in `@typescript-eslint/parser`. That guarantees a vanilla JS/TS repo still produces findings instead of silently reporting "no issues".
+
+For a persistent install (CI image, offline runners), use `bootstrap`:
+
+```bash
+yobitsugi bootstrap eslint                   # npm install -g eslint + plugins
+yobitsugi bootstrap --dry-run eslint         # preview the command
+```
+
+Or pass `--no-fetch-native` to opt out of the auto-install at scan time (e.g. if you've already done `bootstrap` and want a faster startup).
 
 ### Trufflehog (persistent install)
 
@@ -187,8 +205,9 @@ Every finding has a stable `id` (a hash of `tool` + `file` + `line` + `rule_id`)
 1. Creates a fresh temp directory and redirects its managed scanner venv there for the duration of the command.
 2. Detects the repo's languages and installs **only the pip scanners the repo actually needs** — semgrep won't be pulled into a Bash-only repo, bandit won't be pulled into a Go-only repo.
 3. Downloads the right **trufflehog** release binary for your platform into the same temp dir. trufflehog is a Go binary and can't live inside a Python venv, but the temp tools dir is on the same lifecycle — `tempfile.mkdtemp` on entry, `shutil.rmtree` in the `finally`. Skip with `--no-fetch-native` if you've already got it on `PATH` (e.g. from `yobitsugi bootstrap`).
-4. Runs the scan against the throwaway venv — scanners run in parallel via a thread pool (see "Parallel scanning" above). `PATH` is auto-prepended so the temp scanners shadow anything on the system.
-5. Deletes the temp directory in a `finally` block. Your `~/.yobitsugi/tools/` is never touched.
+4. If JS/TS files were detected, `npm install`s **eslint** + the security and TypeScript plugins into `<tmp>/node/node_modules/` — same temp dir, same cleanup. Requires `npm` on the host. Falls back to the bundled eslint security config when your repo has none of its own. Skip with `--no-fetch-native`.
+5. Runs the scan against the throwaway venv — scanners run in parallel via a thread pool (see "Parallel scanning" above). `PATH` is auto-prepended so the temp scanners shadow anything on the system.
+6. Deletes the temp directory in a `finally` block. Your `~/.yobitsugi/tools/` is never touched.
 
 ```bash
 yobitsugi scan ./services/api --ephemeral-tools
@@ -229,7 +248,8 @@ yobitsugi list-scanners                          # every scanner + install statu
 yobitsugi install-scanners                       # persistent install of pip scanners into ~/.yobitsugi/tools/venv/
 yobitsugi install-scanners --all                 # force reinstall/upgrade all of them
 yobitsugi uninstall-scanners                     # wipe the managed venv
-yobitsugi bootstrap                              # persistent install of native scanners (trufflehog) via brew/apt/dnf/yum
+yobitsugi bootstrap                              # persistent install of native scanners (trufflehog, eslint) via brew/apt/dnf/yum/npm
+yobitsugi bootstrap eslint                       # just eslint (npm install -g)
 yobitsugi bootstrap --dry-run                    # preview the install command without running it
 ```
 
@@ -305,9 +325,10 @@ yobitsugi list-scanners
 yobitsugi install-scanners                       # persistent install of missing pip scanners → ~/.yobitsugi/tools/venv/
 yobitsugi install-scanners --all                 # force reinstall/upgrade
 yobitsugi uninstall-scanners                     # wipe ~/.yobitsugi/tools/
-yobitsugi bootstrap                              # persistent install of trufflehog via brew/apt/dnf/yum
+yobitsugi bootstrap                              # persistent install of native scanners (trufflehog via brew/apt/dnf/yum, eslint via npm)
+yobitsugi bootstrap trufflehog                   # just trufflehog
+yobitsugi bootstrap eslint                       # just eslint (npm install -g eslint + plugins)
 yobitsugi bootstrap --dry-run                    # preview the install command
-yobitsugi bootstrap trufflehog                   # be explicit about which scanner
 
 yobitsugi version
 ```

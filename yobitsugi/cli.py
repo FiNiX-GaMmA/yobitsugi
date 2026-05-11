@@ -216,6 +216,28 @@ def _with_optional_ephemeral_tools(fn, args: argparse.Namespace, root: Path) -> 
                 print("      scan will continue; trufflehog will be marked skipped. "
                       "Pre-install with `yobitsugi bootstrap` or pass --no-fetch-native to silence.")
 
+        # ── eslint → npm-install into the managed tools dir ───────────────
+        # eslint is a Node.js binary, same story as trufflehog. The bundled
+        # default config (data/eslint-security.eslintrc.json) lights up
+        # eslint-plugin-security if the target repo has no eslint config of
+        # its own. Skipped when the repo doesn't have JS/TS code OR when npm
+        # isn't on PATH (we print a hint and continue).
+        wants_eslint = any(lang in languages for lang in ("JavaScript", "TypeScript"))
+        if (
+            wants_eslint
+            and not getattr(args, "no_fetch_native", False)
+            and _shutil.which("eslint") is None
+        ):
+            print("[ephemeral-tools] installing eslint via npm (JS/TS detected)…",
+                  end=" ", flush=True)
+            ok, msg = tools.install_eslint_into_tools_dir()
+            print("ok" if ok else "SKIPPED")
+            if not ok:
+                # Most common cause: no `npm` on PATH. The function returns
+                # an actionable message in that case.
+                print(f"      {msg}")
+                print("      scan will continue; eslint will be marked skipped.")
+
         try:
             return fn()
         finally:
@@ -378,6 +400,18 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
             ("apt",     ["sudo", "apt-get", "install", "-y", "trufflehog"]),
             ("dnf",     ["sudo", "dnf", "install", "-y", "trufflehog"]),
             ("yum",     ["sudo", "yum", "install", "-y", "trufflehog"]),
+        ],
+        "eslint": [
+            # `npm install -g` is the canonical install path. We bundle the
+            # security plugin and the TypeScript parser too — same set as the
+            # ephemeral install in tools.install_eslint_into_tools_dir().
+            ("npm", [
+                "npm", "install", "-g",
+                "eslint@^8.57",
+                "eslint-plugin-security@^3",
+                "@typescript-eslint/parser@^7",
+                "@typescript-eslint/eslint-plugin@^7",
+            ]),
         ],
     }
 

@@ -179,6 +179,19 @@ def main(argv: list[str] | None = None) -> int:
     # installed via `yobitsugi install-scanners` are visible to subprocesses.
     env = tools.prepend_to_path()
 
+    # Point the eslint command in scanners.yaml at our bundled fallback config
+    # and at the node_modules root we installed plugins into. These env vars
+    # are no-ops when the user's repo has its own .eslintrc.* — the shell
+    # branch in the scanner command short-circuits to the user config in that
+    # case.
+    pkg_root = Path(__file__).resolve().parent.parent
+    fallback_cfg = pkg_root / "data" / "eslint-security.eslintrc.json"
+    if fallback_cfg.is_file():
+        env["YOBITSUGI_ESLINT_FALLBACK_CONFIG"] = str(fallback_cfg)
+    node_root = tools.TOOLS_DIR / "node"
+    if (node_root / "node_modules").is_dir():
+        env["YOBITSUGI_NODE_MODULES_ROOT"] = str(node_root)
+
     max_workers = 1 if args.sequential else _resolve_max_workers(args.concurrency)
     max_workers = min(max_workers, len(to_run))
 

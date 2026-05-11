@@ -277,6 +277,89 @@ def install_trufflehog_into_tools_dir() -> tuple[bool, str]:
         return False, f"failed to install trufflehog {version}: {e}"
 
 
+def node_bin_path() -> Path:
+    """Where eslint and other npm-installed scanner binaries end up.
+
+    `npm install --prefix <tools_dir>/node <pkg>` creates
+    ``<tools_dir>/node/node_modules/.bin/`` with one entry per installed
+    package's executable. Same dir whether the tools dir is the persistent
+    ``~/.yobitsugi/tools/`` or the ``tempfile.mkdtemp()`` from
+    ``ephemeral_tools_dir()``.
+    """
+    return TOOLS_DIR / "node" / "node_modules" / ".bin"
+
+
+def install_eslint_into_tools_dir() -> tuple[bool, str]:
+    """`npm install` eslint + security plugins into the managed tools dir.
+
+    eslint is a Node.js binary with no PyPI wrapper, so it can't live inside
+    a Python venv. Instead we drop it next to the venv in
+    ``<TOOLS_DIR>/node/node_modules/.bin/eslint`` and let
+    ``prepend_to_path()`` make it visible to scanner subprocesses. Under
+    ``--ephemeral-tools`` the whole ``<TOOLS_DIR>`` is a ``tempfile.mkdtemp``
+    that gets ``shutil.rmtree``'d in the ``finally`` block — so no leftover
+    ``node_modules`` after the scan.
+
+    Returns ``(success, message)``. Failures are non-fatal: the scan
+    continues and eslint is marked ``skipped_missing_tool`` in the report.
+
+    Requires ``npm`` to already be on PATH. Trying to auto-install Node
+    itself is outside scope (it's a 100MB+ runtime and depends on the host
+    OS's package manager — same shape as our trufflehog `bootstrap` path).
+    """
+    if shutil.which("npm") is None:
+        return False, (
+            "npm not found on PATH. Install Node.js (which ships with npm) "
+            "from https://nodejs.org/ or via your system package manager "
+            "(`brew install node` / `apt-get install nodejs npm`), then "
+            "re-run. Yobitsugi can't bootstrap Node itself — it's a 100MB+ "
+            "runtime that needs OS-level install."
+        )
+
+    node_root = TOOLS_DIR / "node"
+    target = node_root / "node_modules" / ".bin" / (
+        "eslint.cmd" if os.name == "nt" else "eslint"
+    )
+    if target.exists():
+        return True, f"eslint already at {target}"
+
+    node_root.mkdir(parents=True, exist_ok=True)
+
+    # Pin a known-good combo. eslint 8 uses .eslintrc, eslint 9 uses flat
+    # config — `eslint-plugin-security` v3+ supports both, but to avoid
+    # surprising users who have a .eslintrc.* (which is the still-common
+    # shape across the npm ecosystem) we stay on eslint 8.x. Bump when the
+    # ecosystem moves.
+    pkgs = [
+        "eslint@^8.57",
+        "eslint-plugin-security@^3",
+        "@typescript-eslint/parser@^7",
+        "@typescript-eslint/eslint-plugin@^7",
+    ]
+    cmd = [
+        "npm", "install",
+        "--prefix", str(node_root),
+        "--no-audit", "--no-fund", "--silent",
+        *pkgs,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return False, "npm install timed out after 5 minutes"
+    except Exception as e:
+        return False, f"npm install failed: {e}"
+
+    if result.returncode != 0:
+        msg = (result.stderr or result.stdout).strip()[-800:]
+        return False, f"npm install exited {result.returncode}: {msg}"
+    if not target.exists():
+        return False, (
+            f"npm install succeeded but {target} is missing — node_modules "
+            "layout may have changed upstream"
+        )
+    return True, f"installed eslint → {target}"
+
+
 def install_missing_pip_scanners(
     registry: dict, languages: Iterable[str] | None = None
 ) -> tuple[list[str], list[str]]:
@@ -337,13 +420,35 @@ def install_missing_pip_scanners(
 
 
 def prepend_to_path(env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return a copy of `env` (or os.environ) with the managed venv bin prepended to PATH."""
+    """Return a copy of ``env`` (or ``os.environ``) with the managed venv bin
+    AND the npm-installed node bin prepended to PATH.
+
+    Two dirs to add (in order — Python scanners first, then node scanners):
+
+    - ``tools_bin_path()``  → bandit / safety / pip-audit / semgrep /
+      flawfinder / shellcheck (via shellcheck-py) / trufflehog (auto-fetched
+      Go binary).
+    - ``node_bin_path()``   → eslint (auto-installed via npm).
+
+    Both dirs share the same ephemeral lifecycle when ``--ephemeral-tools``
+    is in play — created inside the temp ``TOOLS_DIR``, removed by the
+    ``ephemeral_tools_dir()`` ``finally`` clause.
+    """
     base = dict(env if env is not None else os.environ)
+    existing = base.get("PATH", "")
+    parts = existing.split(os.pathsep) if existing else []
+
+    candidates: list[Path] = []
     if venv_exists():
-        bin_str = str(tools_bin_path())
-        existing = base.get("PATH", "")
-        if bin_str not in existing.split(os.pathsep):
-            base["PATH"] = bin_str + os.pathsep + existing
+        candidates.append(tools_bin_path())
+    if node_bin_path().is_dir():
+        candidates.append(node_bin_path())
+
+    for path in candidates:
+        s = str(path)
+        if s not in parts:
+            parts.insert(0, s)
+    base["PATH"] = os.pathsep.join(parts)
     return base
 
 
