@@ -12,16 +12,22 @@ calling us) decide how to bootstrap them.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import venv
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+# Default (persistent) install location. The values are mutated by
+# `ephemeral_tools_dir()` so a single run can use a throwaway venv. Other modules
+# read these via `tools.TOOLS_DIR` / `tools.VENV_DIR` (never via `from ... import`)
+# so the swap is visible everywhere.
 TOOLS_DIR = Path.home() / ".yobitsugi" / "tools"
 VENV_DIR = TOOLS_DIR / "venv"
 MANIFEST_PATH = TOOLS_DIR / "installed.json"
@@ -145,6 +151,101 @@ def build_install_plans(
                 )
             )
     return plans
+
+
+@contextlib.contextmanager
+def ephemeral_tools_dir(base: Path | None = None) -> Iterator[Path]:
+    """Swap TOOLS_DIR / VENV_DIR / MANIFEST_PATH to a fresh temp directory for
+    the duration of a single yobitsugi run, then delete it on exit.
+
+    Used by `yobitsugi run --ephemeral-tools` / `yobitsugi scan --ephemeral-tools`
+    so a one-shot invocation can install scanners into an isolated venv that's
+    automatically torn down once the scan + fixes + report are done. Cleanup
+    runs in a finally block so it triggers on exceptions, SIGINT, and normal
+    completion alike.
+
+    `base` lets the caller pin the temp directory under a known parent (mainly
+    useful for tests). Default is `tempfile.mkdtemp()` under the OS temp root.
+    """
+    global TOOLS_DIR, VENV_DIR, MANIFEST_PATH
+    saved = (TOOLS_DIR, VENV_DIR, MANIFEST_PATH)
+
+    if base is not None:
+        base.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix="venv-", dir=str(base)))
+    else:
+        tmp = Path(tempfile.mkdtemp(prefix="yobitsugi-tools-"))
+
+    TOOLS_DIR = tmp
+    VENV_DIR = tmp / "venv"
+    MANIFEST_PATH = tmp / "installed.json"
+    try:
+        yield tmp
+    finally:
+        TOOLS_DIR, VENV_DIR, MANIFEST_PATH = saved
+        # ignore_errors so cleanup never masks a real exception from the
+        # body — if a file is locked on Windows we'd rather leak the temp dir
+        # than swallow the underlying failure.
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def install_missing_pip_scanners(
+    registry: dict, languages: Iterable[str] | None = None
+) -> tuple[list[str], list[str]]:
+    """Install every pip-installable scanner whose binary is currently missing
+    from PATH and from the managed venv. Returns (installed, failed) name lists.
+
+    When `languages` is provided, only scanners registered under those languages
+    (plus `_cross_language`) are considered — this avoids pulling semgrep into
+    the ephemeral venv if the repo has no code semgrep would scan. When it's
+    None, every pip scanner in the registry is considered.
+
+    This is the programmatic equivalent of `yobitsugi install-scanners`, factored
+    out so `--ephemeral-tools` can call it without spawning a subprocess.
+    """
+    # Figure out which scanners are in scope.
+    if languages is not None:
+        in_scope_names: set[str] = set()
+        for lang in list(languages) + ["_cross_language"]:
+            for s in registry.get(lang, []) or []:
+                in_scope_names.add(s["name"])
+    else:
+        in_scope_names = {
+            s["name"]
+            for scanners in registry.values()
+            for s in (scanners or [])
+        }
+
+    # Which binaries are missing?
+    venv_bin = tools_bin_path() if venv_exists() else None
+    missing_binaries: set[str] = set()
+    for scanners in registry.values():
+        for s in scanners or []:
+            if s["name"] not in in_scope_names:
+                continue
+            binary = s["binary"]
+            on_path = shutil.which(binary) is not None
+            in_venv = venv_bin is not None and (venv_bin / binary).exists()
+            if not (on_path or in_venv):
+                missing_binaries.add(binary)
+
+    plans = [
+        p
+        for p in build_install_plans(registry, missing_binaries=missing_binaries)
+        if p.name in in_scope_names
+        and p.method == "pip"
+        and not p.already_installed
+    ]
+    if not plans:
+        return [], []
+
+    ensure_venv()
+    installed: list[str] = []
+    failed: list[str] = []
+    for plan in plans:
+        ok, _msg = install_python_tool(plan.name, plan.package or plan.name)
+        (installed if ok else failed).append(plan.name)
+    return installed, failed
 
 
 def prepend_to_path(env: dict[str, str] | None = None) -> dict[str, str]:

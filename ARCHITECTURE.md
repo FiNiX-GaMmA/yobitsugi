@@ -39,6 +39,7 @@ yobitsugi/
 │   ├── tests_gen.py    LLM call → regression test per fix
 │   ├── validate.py     re-scan + set-diff
 │   ├── pipeline.py     in-process orchestrator — exposes run_pipeline() + main()
+│   ├── tools.py        managed-venv install paths + `ephemeral_tools_dir()` context manager
 │   └── llm.py          provider abstraction (OpenAI/Anthropic/Google/Ollama/OpenAI-compat)
 ├── data/               static reference content shipped with the package
 │   ├── scanners.yaml          scanner registry (per-language + cross-language)
@@ -68,8 +69,8 @@ yobitsugi/
 | `yobitsugi uninstall [--platform X]` | Remove the slash command. |
 | `yobitsugi list-platforms` | Show every supported assistant, marked as detected/not. |
 | `yobitsugi detect-platforms` | Just the detected ones. |
-| `yobitsugi run <path>` | End-to-end pipeline. Aliased: `yobitsugi <path>`. |
-| `yobitsugi scan <path>` | Scan-only — no LLM, no fixes. |
+| `yobitsugi run <path> [--ephemeral-tools]` | End-to-end pipeline. Aliased: `yobitsugi <path>`. With `--ephemeral-tools`, the scanner venv is created in a tempdir and deleted when the command exits. |
+| `yobitsugi scan <path> [--ephemeral-tools]` | Scan-only — no LLM, no fixes. With `--ephemeral-tools`, same throwaway-venv behaviour as `run`. |
 | `yobitsugi findings <ws>` | Pretty-print or `--json` dump existing findings. |
 | `yobitsugi rollback <ws>` | Restore all `.yobitsugi.bak` files from a workspace's `applied.json`. |
 | `yobitsugi config --init / --print` | Bootstrap or inspect resolved LLM provider config. |
@@ -86,6 +87,38 @@ Positional shortcut: `yobitsugi <path>` (first arg not a known subcommand) is re
 5. Assistant reads `findings.json`, `validation.json`, summarises in the chat.
 
 The LLM call inside `fix.py` uses the **same** provider the user has configured for the standalone CLI — it does *not* hijack the assistant's own model API. This is deliberate: it keeps cost and observability in one place, and works identically regardless of which assistant invoked it.
+
+## Ephemeral tools mode
+
+`yobitsugi run --ephemeral-tools` and `yobitsugi scan --ephemeral-tools` install the pip-installable scanners into a throwaway venv for the duration of one invocation, then delete it. This is what makes the slash-command invocation pattern (`/yobitsugi .` inside any supported assistant) safe to run on machines that don't have scanners installed — there's no leftover state, no `~/.yobitsugi/tools/` to clean up afterwards.
+
+The mechanism has three pieces, all owned by `cli.py` and `core/tools.py`:
+
+| Piece | Module | Responsibility |
+| --- | --- | --- |
+| `--ephemeral-tools` flag | `cli.py` (registered on both `run` and `scan` subparsers) | Opt-in switch. Default is the persistent `~/.yobitsugi/tools/venv/` behaviour. |
+| `_with_optional_ephemeral_tools(fn, args, root)` | `cli.py` | Wraps the body of `cmd_run` / `cmd_scan`. When the flag is set: detect languages → enter `tools.ephemeral_tools_dir()` → install only the pip scanners the repo actually needs → call `fn()` → tear down temp venv in a `finally`. |
+| `_quick_detect_languages(root)` | `cli.py` | Calls `detect.detect()` directly to get the language map *before* the pipeline does. This lets the pre-install step target only the relevant scanners, without writing to the real workspace and without ordering it before the pipeline's own `detect` stage. Returns `[]` on any error, in which case the install step falls back to installing every pip scanner. |
+| `tools.ephemeral_tools_dir()` | `core/tools.py` | Context manager. Swaps the module-level `TOOLS_DIR` / `VENV_DIR` / `MANIFEST_PATH` to a fresh `tempfile.mkdtemp()` path on entry, restores the originals and `shutil.rmtree`s the temp dir on exit. Cleanup runs in a `finally` block so exceptions and SIGINT both trigger it. |
+| `tools.install_missing_pip_scanners(registry, languages=...)` | `core/tools.py` | The programmatic equivalent of `yobitsugi install-scanners`, factored out so `--ephemeral-tools` can call it without spawning a subprocess. Returns `(installed_names, failed_names)`. |
+
+Sequence (one invocation of `yobitsugi run --ephemeral-tools <root>`):
+
+```
+cli.main
+ └─ cmd_run(args)
+     └─ _with_optional_ephemeral_tools(fn=run_pipeline, args, root)
+         ├─ _quick_detect_languages(root)              # cheap pre-sniff
+         ├─ tools.ephemeral_tools_dir() as tmp:        # mkdtemp + path swap
+         │   ├─ tools.install_missing_pip_scanners(registry, languages)
+         │   ├─ fn()                                    # → run_pipeline(...)
+         │   └─ finally: print teardown
+         └─ (context exit) shutil.rmtree(tmp)
+```
+
+The `tools.TOOLS_DIR` / `VENV_DIR` / `MANIFEST_PATH` constants are mutated in place so every other module that reads them (e.g. `scan.py` calls `tools.venv_exists()` and `tools.prepend_to_path()`) automatically sees the temp paths. The rule: never `from yobitsugi.core.tools import VENV_DIR` — always `tools.VENV_DIR`. The existing modules all follow this; tests assert the swap is visible to scanners.
+
+`--ephemeral-tools` is intentionally additive: without it, the CLI behaves exactly as before and the persistent `~/.yobitsugi/tools/venv/` workflow is unchanged.
 
 ## Extending
 
@@ -169,3 +202,5 @@ The result is that `pytest` runs end-to-end against the full pipeline (with `run
 **Why ship `data/` with the wheel instead of fetching at runtime?** Offline-first. `yobitsugi scan` works without network. Only `fix` needs network (for the LLM call).
 
 **Why a separate pure function for `fix.generate_fix()` and `apply.apply_diff()`?** So the pipeline can call them without going through argv parsing and stdin piping, and so unit tests can exercise the LLM-shaped code path with a mocked `requests.post` rather than forking a process. The original `main()` entry points still exist and still read from stdin / argv — they're just thin wrappers around the pure functions now.
+
+**Why mutate `tools.TOOLS_DIR` for `--ephemeral-tools` instead of threading a path argument through every call site?** Because `scan.py`, `cli.py` and the future installers all reach into `tools` to ask "where's the managed venv?" — passing a path through five layers of function calls just to redirect a single context-manager-scoped run would have been worse, both for the diff size and for the chance of one call site forgetting. The price is a global mutation, which is OK because (a) it's strictly scoped to the lifetime of the context manager, (b) the `finally` restores the originals even on Ctrl-C, and (c) tests already use the same pattern (`fake_home` redirects `Path.home()` globally for the test's duration). The discipline is "everyone reads `tools.VENV_DIR`, nobody copies it into a local at import time" — and the existing modules all follow that.

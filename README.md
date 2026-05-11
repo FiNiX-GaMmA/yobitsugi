@@ -43,6 +43,7 @@
 - [Supported AI coding assistants](#supported-ai-coding-assistants)
 - [Supported scanners](#supported-scanners)
 - [Installing scanners](#installing-scanners)
+- [Ephemeral tools mode](#ephemeral-tools-mode)
 - [Configure the LLM provider](#configure-the-llm-provider)
 - [Common commands](#common-commands)
 - [Architecture overview](#architecture-overview)
@@ -236,6 +237,34 @@ If you're running yobitsugi via an AI assistant (`/yobitsugi .`), the assistant 
 
 ---
 
+## Ephemeral tools mode
+
+Both `yobitsugi run` and `yobitsugi scan` accept `--ephemeral-tools`. With that flag:
+
+1. yobitsugi creates a fresh temp directory (under the OS temp root) and redirects its managed venv there for the duration of the command.
+2. It detects the repo's languages **before** writing anything to the workspace and installs only the pip scanners the repo actually needs — semgrep won't be pulled in for a Bash-only repo, bandit won't be pulled in for a Go-only repo.
+3. The full pipeline (or scan-only) runs against the throwaway venv. `PATH` is prepended automatically so the temp scanners shadow anything on the system.
+4. When the command exits — successfully, with an error, or via Ctrl-C — the temp directory is deleted in a `finally` block. Your home dir's `~/.yobitsugi/tools/` is never touched.
+
+This is the recommended path for slash-command invocations (`/yobitsugi .` inside any assistant), one-off audits, and CI jobs that don't want to leave state behind. The persistent `yobitsugi install-scanners` flow is still the right choice for developer workstations where you'd rather pay the install cost once.
+
+```bash
+yobitsugi scan ./services/api --ephemeral-tools     # one-shot scan, no leftover venv
+yobitsugi run ./services/api --ephemeral-tools      # full pipeline, cleaned up at the end
+```
+
+Under the hood:
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| `--ephemeral-tools` flag | `yobitsugi run`, `yobitsugi scan` | Opt in to the ephemeral venv path for a single invocation. |
+| `tools.ephemeral_tools_dir()` | [`yobitsugi/core/tools.py`](yobitsugi/core/tools.py) | Context manager that swaps `TOOLS_DIR` / `VENV_DIR` / `MANIFEST_PATH` to a fresh `tempfile.mkdtemp()` and `shutil.rmtree`s it on exit. |
+| `tools.install_missing_pip_scanners(registry, languages=...)` | [`yobitsugi/core/tools.py`](yobitsugi/core/tools.py) | Programmatic equivalent of `install-scanners`, scoped to the languages the repo actually has. |
+| `_with_optional_ephemeral_tools()` | [`yobitsugi/cli.py`](yobitsugi/cli.py) | Wraps the body of `cmd_run` / `cmd_scan`: detect languages → install only the pip scanners the repo needs → run pipeline → tear down temp venv on the way out. |
+| `_quick_detect_languages()` | [`yobitsugi/cli.py`](yobitsugi/cli.py) | Calls `detect.detect()` directly so the pre-install language sniff doesn't touch the real workspace before the pipeline does. |
+
+---
+
 ## Configure the LLM provider
 
 Provider config is resolved in this order: `--provider` flag → environment variables → `~/.yobitsugi/config.yaml` → autodetect from any API key in env.
@@ -264,8 +293,10 @@ yobitsugi config               # show resolved provider/model/base_url
 /yobitsugi . --provider anthropic --model claude-opus-4-7
 /yobitsugi . --skip-tests                        # don't generate regression tests
 /yobitsugi . --allow-dirty                       # run on a dirty git tree
+/yobitsugi . --ephemeral-tools                   # install scanners into a temp venv, delete it after the run
 
 yobitsugi scan ./services/api                    # scan-only, no fixes, no LLM
+yobitsugi scan ./services/api --ephemeral-tools  # scan in a throwaway venv that's deleted on exit
 yobitsugi findings ~/.yobitsugi/<workspace>      # pretty-print existing findings
 yobitsugi findings <ws> --severity HIGH --json   # JSON output for piping
 yobitsugi rollback ~/.yobitsugi/<workspace>      # restore all .yobitsugi.bak files

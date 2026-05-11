@@ -96,16 +96,19 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     from yobitsugi.core.pipeline import run_pipeline
 
-    return run_pipeline(
-        root=args.path,
-        workspace=args.workspace,
-        severity=args.severity,
-        auto=args.auto,
-        allow_dirty=args.allow_dirty,
-        provider=args.provider,
-        model=args.model,
-        skip_tests=args.skip_tests,
-    )
+    def _go() -> int:
+        return run_pipeline(
+            root=args.path,
+            workspace=args.workspace,
+            severity=args.severity,
+            auto=args.auto,
+            allow_dirty=args.allow_dirty,
+            provider=args.provider,
+            model=args.model,
+            skip_tests=args.skip_tests,
+        )
+
+    return _with_optional_ephemeral_tools(_go, args, root=args.path)
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -119,29 +122,81 @@ def cmd_scan(args: argparse.Namespace) -> int:
     workspace.mkdir(parents=True, exist_ok=True)
     print(f"workspace: {workspace}")
 
-    for label, fn, argv in (
-        ("detect", detect.main, ["--root", str(args.path), "--out", str(workspace)]),
-        ("scan",   scan.main,   ["--workspace", str(workspace), "--root", str(args.path)]),
-        ("parse",  parse.main,  ["--workspace", str(workspace)]),
-    ):
-        print(f"\n=== {label} ===")
-        rc = fn(argv)
-        if rc != 0:
-            return rc
+    def _go() -> int:
+        for label, fn, argv in (
+            ("detect", detect.main, ["--root", str(args.path), "--out", str(workspace)]),
+            ("scan",   scan.main,   ["--workspace", str(workspace), "--root", str(args.path)]),
+            ("parse",  parse.main,  ["--workspace", str(workspace)]),
+        ):
+            print(f"\n=== {label} ===")
+            rc = fn(argv)
+            if rc != 0:
+                return rc
 
-    findings_path = workspace / "findings.json"
-    if findings_path.exists():
-        findings = json.loads(findings_path.read_text())
-        by_sev: dict[str, int] = {}
-        for f in findings:
-            by_sev[f["severity"]] = by_sev.get(f["severity"], 0) + 1
-        print(f"\n{len(findings)} findings: " +
-              ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())))
+        findings_path = workspace / "findings.json"
+        if findings_path.exists():
+            findings = json.loads(findings_path.read_text())
+            by_sev: dict[str, int] = {}
+            for f in findings:
+                by_sev[f["severity"]] = by_sev.get(f["severity"], 0) + 1
+            print(f"\n{len(findings)} findings: " +
+                  ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())))
 
-    # Detailed tabular report — same one `yobitsugi run` emits at completion.
-    from yobitsugi.core import summary as summary_mod
-    summary_mod.render(workspace, mode="rich")
-    return 0
+        # Detailed tabular report — same one `yobitsugi run` emits at completion.
+        from yobitsugi.core import summary as summary_mod
+        summary_mod.render(workspace, mode="rich")
+        return 0
+
+    return _with_optional_ephemeral_tools(_go, args, root=args.path)
+
+
+def _with_optional_ephemeral_tools(fn, args: argparse.Namespace, root: Path) -> int:
+    """If --ephemeral-tools was passed, run `fn` inside an ephemeral venv that
+    holds just the pip-installable scanners we need, then delete it. Otherwise
+    run `fn` against the persistent ~/.yobitsugi/tools/venv/ (or the user's PATH).
+
+    Both behaviours go through this single wrapper so the slash-command-style
+    invocation pattern ("/yobitsugi . — install, scan, fix, clean up") is the
+    one-flag path it claims to be.
+    """
+    if not getattr(args, "ephemeral_tools", False):
+        return fn()
+
+    from yobitsugi.core import tools
+
+    # Pre-load the registry and detect languages once so we can install only the
+    # scanners the repo will actually use. Detection re-runs inside the pipeline
+    # too, but that's cheap and keeps the install step language-aware here.
+    registry = _load_scanner_registry()
+    languages = _quick_detect_languages(root)
+
+    with tools.ephemeral_tools_dir() as tmp:
+        print(f"[ephemeral-tools] managed venv: {tmp / 'venv'}")
+        print("[ephemeral-tools] installing scanners for detected languages: "
+              f"{', '.join(languages) if languages else '(none yet)'}")
+        installed, failed = tools.install_missing_pip_scanners(registry, languages=languages)
+        if installed:
+            print(f"[ephemeral-tools] installed: {', '.join(installed)}")
+        if failed:
+            print(f"[ephemeral-tools] failed to install: {', '.join(failed)} "
+                  "(scan will continue and mark those scanners as skipped)")
+        try:
+            return fn()
+        finally:
+            print(f"[ephemeral-tools] tearing down {tmp}")
+
+
+def _quick_detect_languages(root: Path) -> list[str]:
+    """Lightweight wrapper around detect.detect so the ephemeral-tools pre-install
+    can target the right scanners. Returns [] on any error so the caller falls
+    back to installing every pip scanner."""
+    try:
+        from yobitsugi.core import detect
+
+        counts, _skipped = detect.detect(root)
+        return list(counts.keys())
+    except Exception:
+        return []
 
 
 def cmd_findings(args: argparse.Namespace) -> int:
@@ -373,6 +428,15 @@ def build_parser() -> argparse.ArgumentParser:
                        help="openai | anthropic | google | ollama | openai-compatible")
     p_run.add_argument("--model", help="Model name (provider-specific).")
     p_run.add_argument("--skip-tests", action="store_true")
+    p_run.add_argument(
+        "--ephemeral-tools", action="store_true",
+        help=(
+            "Install required pip scanners into a throwaway venv just for this "
+            "run, then delete it when the report is written. Keeps the user's "
+            "Python env and ~/.yobitsugi/tools/ untouched. Recommended for the "
+            "slash-command-style `/yobitsugi .` invocation."
+        ),
+    )
     p_run.set_defaults(func=cmd_run)
 
     p_scan = sub.add_parser("scan",
@@ -380,6 +444,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("path", type=Path)
     p_scan.add_argument("--out", type=Path,
                         help="Workspace dir (default: ~/.yobitsugi/<name>-<ts>/).")
+    p_scan.add_argument(
+        "--ephemeral-tools", action="store_true",
+        help=(
+            "Install required pip scanners into a throwaway venv just for this "
+            "scan, then delete it when findings.json is written."
+        ),
+    )
     p_scan.set_defaults(func=cmd_scan)
 
     p_find = sub.add_parser("findings", help="Pretty-print findings.json from a workspace.")

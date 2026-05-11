@@ -21,9 +21,15 @@
 
 Python:
   - name: bandit
+    # -x: bandit walks the tree top-down; without exclusions it descends into
+    # .venv/site-packages (millions of files) and any vendored / generated assets
+    # in repos that ship a local venv. Default excludes are git/hg/tox/eggs only,
+    # so we add the environment, build, cache, and dependency dirs here. Users
+    # can override with a project-level .bandit / bandit.yaml.
     binary: bandit
-    command: 'bandit -r {root} -f json -o {out} || true'
+    command: 'bandit -r {root} -f json -o {out} -x ".venv,venv,env,.env,virtualenv,node_modules,bower_components,.tox,.eggs,build,dist,.build,site-packages,.git,__pycache__,.mypy_cache,.pytest_cache,.ruff_cache,.cache,.next,.nuxt,target,vendor,third_party" || true'
     output: json
+    timeout: 300
     install:
       method: pip
       package: bandit
@@ -169,14 +175,19 @@ Shell:
 
 _cross_language:
   - name: semgrep
+    # semgrep also walks the tree; same exclusions as bandit, expressed as
+    # repeated --exclude flags. Each --exclude is a directory or glob.
     binary: semgrep
-    command: 'semgrep --config=auto --json -o {out} {root} || true'
+    command: 'semgrep --config=auto --json -o {out} --exclude=.venv --exclude=venv --exclude=env --exclude=.env --exclude=virtualenv --exclude=node_modules --exclude=bower_components --exclude=.tox --exclude=.eggs --exclude=build --exclude=dist --exclude=site-packages --exclude=.git --exclude=__pycache__ --exclude=.mypy_cache --exclude=.pytest_cache --exclude=.ruff_cache --exclude=.cache --exclude=.next --exclude=.nuxt --exclude=target --exclude=vendor --exclude=third_party {root} || true'
     output: json
     timeout: 1200
     install:
       method: pip
       package: semgrep
   - name: trufflehog
+    # trufflehog is a Go binary and respects .gitignore by default, so .venv /
+    # node_modules don't usually hurt. If a project doesn't have a .gitignore,
+    # the user can pass their own exclude file via TRUFFLEHOG_EXCLUDE_FILE.
     binary: trufflehog
     command: 'trufflehog filesystem --json --no-update {root} > {out} || true'
     output: inline_stdout
