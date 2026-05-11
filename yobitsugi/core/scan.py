@@ -18,6 +18,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
@@ -27,6 +29,13 @@ except ImportError:
     sys.exit(2)
 
 from yobitsugi.core import tools
+
+# Default scanner concurrency. Each scanner spends almost all its wall time in
+# a subprocess (the scanner binary itself), so threads are the right shape —
+# no GIL contention. Capped at 6 by default to avoid hammering CI runners that
+# only have 2 vCPUs. Override with the YOBITSUGI_SCAN_CONCURRENCY env var or
+# the --concurrency CLI flag.
+DEFAULT_MAX_WORKERS = 6
 
 PKG_ROOT = Path(__file__).resolve().parent.parent
 SCANNERS_YAML = PKG_ROOT / "data" / "scanners.yaml"
@@ -98,6 +107,21 @@ def run_one(
     }
 
 
+def _resolve_max_workers(cli_value: int | None) -> int:
+    """CLI flag > env var > DEFAULT_MAX_WORKERS. Always at least 1."""
+    if cli_value is not None:
+        return max(1, cli_value)
+    env_value = os.environ.get("YOBITSUGI_SCAN_CONCURRENCY")
+    if env_value:
+        try:
+            return max(1, int(env_value))
+        except ValueError:
+            sys.stderr.write(
+                f"[scan] ignoring invalid YOBITSUGI_SCAN_CONCURRENCY={env_value!r}\n"
+            )
+    return DEFAULT_MAX_WORKERS
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--workspace", required=True, type=Path)
@@ -106,6 +130,18 @@ def main(argv: list[str] | None = None) -> int:
         "--only",
         nargs="*",
         help="Restrict to specific scanner names (e.g. --only bandit semgrep).",
+    )
+    p.add_argument(
+        "--concurrency", type=int, default=None,
+        help=(
+            "Max scanners to run in parallel. Default 6 (overridable via "
+            "YOBITSUGI_SCAN_CONCURRENCY). Each scanner is a subprocess, so "
+            "threads scale fine — the real cap is disk/CPU on the host."
+        ),
+    )
+    p.add_argument(
+        "--sequential", action="store_true",
+        help="Force scanners to run one at a time. Useful for debugging.",
     )
     args = p.parse_args(argv)
 
@@ -143,15 +179,61 @@ def main(argv: list[str] | None = None) -> int:
     # installed via `yobitsugi install-scanners` are visible to subprocesses.
     env = tools.prepend_to_path()
 
+    max_workers = 1 if args.sequential else _resolve_max_workers(args.concurrency)
+    max_workers = min(max_workers, len(to_run))
+
     print(f"[scan] running {len(to_run)} scanners against {args.root}")
     if tools.venv_exists():
         print(f"[scan] managed venv: {tools.VENV_DIR}")
-    reports = []
-    for s in to_run:
-        print(f"  - {s['name']:<14}", end=" ", flush=True)
-        rep = run_one(s, args.root, raw_dir, env=env)
-        print(rep["status"])
-        reports.append(rep)
+    if max_workers > 1:
+        print(f"[scan] concurrency: {max_workers} parallel workers")
+
+    # Preserve registry order in the final report, even though scanners
+    # finish out of order. We index each scanner first, then fill in the
+    # report at the same index as completions arrive.
+    reports: list[dict] = [None] * len(to_run)  # type: ignore[list-item]
+    name_w = max(len(s["name"]) for s in to_run)
+    started_at = time.monotonic()
+
+    if max_workers == 1:
+        # Sequential path — kept for `--sequential` and the one-scanner case.
+        # Identical output to the old behaviour for easy diffing.
+        for i, s in enumerate(to_run):
+            print(f"  - {s['name']:<{name_w}}", end=" ", flush=True)
+            rep = run_one(s, args.root, raw_dir, env=env)
+            print(rep["status"])
+            reports[i] = rep
+    else:
+        # Parallel path. Each scanner runs in its own thread; threads are fine
+        # because every scanner spends its wall time in subprocess.run waiting
+        # on a child process — no Python-level work, no GIL contention.
+        in_flight: dict = {}  # future → (index, scanner_dict, dispatch_time)
+        with ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="yobi-scan"
+        ) as pool:
+            for i, s in enumerate(to_run):
+                fut = pool.submit(run_one, s, args.root, raw_dir, env=env)
+                in_flight[fut] = (i, s, time.monotonic())
+                print(f"  → {s['name']:<{name_w}}  dispatched")
+
+            for fut in as_completed(in_flight):
+                i, s, t0 = in_flight[fut]
+                elapsed = time.monotonic() - t0
+                try:
+                    rep = fut.result()
+                except Exception as e:
+                    # run_one already catches its own subprocess errors, so an
+                    # exception here is genuinely unexpected. Don't let one bad
+                    # scanner crash the whole scan.
+                    rep = {"name": s["name"], "status": "error", "error": str(e)}
+                print(
+                    f"  ✓ {s['name']:<{name_w}}  {rep['status']:<22}  "
+                    f"{elapsed:>5.1f}s"
+                )
+                reports[i] = rep
+
+    total_elapsed = time.monotonic() - started_at
+    print(f"[scan] all scanners done in {total_elapsed:.1f}s")
 
     summary = {
         "root": str(args.root.resolve()),

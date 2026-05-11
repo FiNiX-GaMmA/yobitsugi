@@ -27,16 +27,30 @@ dependencies = [
     "pyyaml>=6.0",
     "requests>=2.31",
     "rich>=13.0",
-    # Pip-installable scanners. These are bundled as direct dependencies so
-    # `pip install yobitsugi` (or the wheel) is one step to a working scan.
-    # If you want a leaner install, drop these from the install line and use
-    # `yobitsugi install-scanners` (persistent venv) or
-    # `yobitsugi run/scan --ephemeral-tools` (throwaway venv) instead.
+    # ─── Pip-installable scanners ──────────────────────────────────────────
+    # These are bundled as direct dependencies so `pip install yobitsugi`
+    # (or the wheel) is one step to a working scan. If you want a leaner
+    # install, drop these from the install line and use `yobitsugi install-
+    # scanners` (persistent venv) or `yobitsugi scan --ephemeral-tools`
+    # (throwaway venv) instead.
     "bandit>=1.7",
-    "safety>=3.0",
+    # safety 3.2+ shipped a Click 8.2 incompat with Typer that breaks at
+    # import time ("Parameter.make_metavar() missing 1 required positional
+    # argument: 'ctx'"). Pinning both safety and click into the known-good
+    # window until upstream catches up.
+    "safety>=3.0,<3.2",
+    "click<8.2",
     "pip-audit>=2.7",
     "semgrep>=1.50",
     "flawfinder>=2.0",
+    # ─── Native scanners bundled as Python wrappers ───────────────────────
+    # shellcheck-py ships the prebuilt shellcheck Haskell binary inside a
+    # Python wheel — `pip install` puts it on PATH automatically, no brew /
+    # apt step. Same name (`shellcheck`) on PATH as the system package, so
+    # scanners.yaml doesn't need to change.
+    "shellcheck-py>=0.10",
+    # trufflehog is a Go binary with no PyPI wrapper — see `yobitsugi
+    # bootstrap` for the brew/apt install path.
 ]
 
 [project.optional-dependencies]
@@ -52,17 +66,21 @@ dependencies = [
 # using its own LLM, so there's no LLM SDK for yobitsugi to depend on.
 scanners = [
     "bandit>=1.7",
-    "safety>=3.0",
+    "safety>=3.0,<3.2",
+    "click<8.2",
     "pip-audit>=2.7",
     "semgrep>=1.50",
     "flawfinder>=2.0",
+    "shellcheck-py>=0.10",
 ]
 all = [
     "bandit>=1.7",
-    "safety>=3.0",
+    "safety>=3.0,<3.2",
+    "click<8.2",
     "pip-audit>=2.7",
     "semgrep>=1.50",
     "flawfinder>=2.0",
+    "shellcheck-py>=0.10",
 ]
 dev = ["pytest>=7", "ruff>=0.4", "mypy>=1.8"]
 

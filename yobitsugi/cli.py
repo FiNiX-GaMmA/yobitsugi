@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -55,6 +56,7 @@ KNOWN_SUBCOMMANDS = {
     "version", "list-platforms", "detect-platforms", "install", "uninstall",
     "scan", "findings", "summary",
     "install-scanners", "uninstall-scanners", "list-scanners",
+    "bootstrap",
 }
 
 
@@ -134,10 +136,21 @@ def cmd_scan(args: argparse.Namespace) -> int:
     workspace.mkdir(parents=True, exist_ok=True)
     print(f"workspace: {workspace}")
 
+    # Forward parallelism flags to core.scan.main. Sequential beats concurrency
+    # when both are passed (sequential is the explicit "I want a deterministic
+    # serial run" escape hatch).
+    scan_argv = ["--workspace", str(workspace), "--root", str(args.path)]
+    if args.sequential:
+        scan_argv.append("--sequential")
+    elif args.concurrency is not None:
+        scan_argv.extend(["--concurrency", str(args.concurrency)])
+    if args.only:
+        scan_argv.extend(["--only", *args.only])
+
     def _go() -> int:
         for label, fn, argv in (
             ("detect", detect.main, ["--root", str(args.path), "--out", str(workspace)]),
-            ("scan",   scan.main,   ["--workspace", str(workspace), "--root", str(args.path)]),
+            ("scan",   scan.main,   scan_argv),
             ("parse",  parse.main,  ["--workspace", str(workspace)]),
         ):
             print(f"\n=== {label} ===")
@@ -326,6 +339,67 @@ def cmd_install_scanners(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Install the native scanners that can't be packaged inside a Python wheel.
+
+    Right now that's just trufflehog (a Go binary). We delegate to the system
+    package manager the user already has (brew on macOS, apt on Debian/Ubuntu,
+    dnf/yum on Fedora). The Python-installable scanners are already in the
+    wheel — see pyproject.toml's [project] dependencies.
+    """
+    import platform
+    import shutil as _shutil
+
+    # Map: scanner binary name → list of (manager, install command). First
+    # manager that's actually on PATH wins.
+    candidates: dict[str, list[tuple[str, list[str]]]] = {
+        "trufflehog": [
+            ("brew",    ["brew", "install", "trufflehog"]),
+            ("apt",     ["sudo", "apt-get", "install", "-y", "trufflehog"]),
+            ("dnf",     ["sudo", "dnf", "install", "-y", "trufflehog"]),
+            ("yum",     ["sudo", "yum", "install", "-y", "trufflehog"]),
+        ],
+    }
+
+    targets = args.scanner or list(candidates.keys())
+    rc = 0
+    for name in targets:
+        if name not in candidates:
+            print(f"[bootstrap] unknown scanner: {name}")
+            rc = 1
+            continue
+        if _shutil.which(name) is not None:
+            print(f"[bootstrap] {name}: already installed (on PATH).")
+            continue
+
+        plan = None
+        for manager, cmd in candidates[name]:
+            if _shutil.which(manager):
+                plan = (manager, cmd)
+                break
+
+        if plan is None:
+            mgrs = ", ".join(m for m, _ in candidates[name])
+            print(
+                f"[bootstrap] {name}: no supported package manager found on PATH "
+                f"(looked for: {mgrs}). On {platform.system()}, install manually — "
+                f"see https://github.com/trufflesecurity/trufflehog#installation"
+            )
+            rc = 1
+            continue
+
+        manager, cmd = plan
+        print(f"[bootstrap] {name}: installing via {manager} → {' '.join(cmd)}")
+        if args.dry_run:
+            continue
+        result = subprocess.run(cmd)  # noqa: S603 — cmd is constructed from the static map above
+        if result.returncode != 0:
+            print(f"[bootstrap] {name}: install failed (exit {result.returncode}).")
+            rc = 1
+
+    return rc
+
+
 def cmd_uninstall_scanners(_args: argparse.Namespace) -> int:
     from yobitsugi.core import tools
 
@@ -392,6 +466,22 @@ def build_parser() -> argparse.ArgumentParser:
             "default for the slash-command-style `/yobitsugi .` invocation."
         ),
     )
+    p_scan.add_argument(
+        "--concurrency", type=int, default=None,
+        help=(
+            "Max scanners to run in parallel. Default 6 (overridable via the "
+            "YOBITSUGI_SCAN_CONCURRENCY env var). Each scanner is a subprocess "
+            "so threads scale fine — the practical cap is disk/CPU on the host."
+        ),
+    )
+    p_scan.add_argument(
+        "--sequential", action="store_true",
+        help="Force scanners to run one at a time. Useful for debugging.",
+    )
+    p_scan.add_argument(
+        "--only", nargs="*",
+        help="Restrict the scan to specific scanner names (e.g. --only bandit semgrep).",
+    )
     p_scan.set_defaults(func=cmd_scan)
 
     p_find = sub.add_parser("findings", help="Pretty-print findings.json from a workspace.")
@@ -442,6 +532,25 @@ def build_parser() -> argparse.ArgumentParser:
         "uninstall-scanners",
         help="Delete ~/.yobitsugi/tools/ (managed venv + manifest).",
     ).set_defaults(func=cmd_uninstall_scanners)
+
+    p_boot = sub.add_parser(
+        "bootstrap",
+        help=(
+            "Install native scanners that aren't pip-installable (currently "
+            "just trufflehog) via the system package manager. The Python "
+            "scanners — bandit, safety, pip-audit, semgrep, flawfinder, and "
+            "shellcheck-py — are already bundled in the wheel."
+        ),
+    )
+    p_boot.add_argument(
+        "scanner", nargs="*",
+        help="Which scanners to install. Default: all not-yet-installed native scanners.",
+    )
+    p_boot.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the install command(s) without running them.",
+    )
+    p_boot.set_defaults(func=cmd_bootstrap)
 
     return p
 

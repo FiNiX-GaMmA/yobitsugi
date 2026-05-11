@@ -19,8 +19,18 @@ rich>=13.0
 # yobitsugi/data/scanners.yaml. Non-pip scanners (eslint, gosec, brakeman,
 # shellcheck, trufflehog, …) are not Python packages and must be installed
 # through their own runtimes — yobitsugi prints install hints for those.
+# safety 3.2+ has a Click 8.2 incompat with Typer that breaks at import time
+# ("Parameter.make_metavar() missing 1 required positional argument: 'ctx'").
+# Pinning both into the known-good window until upstream catches up.
 bandit>=1.7
-safety>=3.0
+safety>=3.0,<3.2
+click<8.2
 pip-audit>=2.7
 semgrep>=1.50
 flawfinder>=2.0
+
+# shellcheck-py ships the prebuilt shellcheck Haskell binary inside a Python
+# wheel — `pip install` puts the `shellcheck` executable on PATH, no system
+# package manager step. trufflehog is *not* on PyPI; install via
+# `yobitsugi bootstrap` (brew on macOS, apt on Debian/Ubuntu).
+shellcheck-py>=0.10
