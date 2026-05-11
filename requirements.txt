@@ -1,0 +1,26 @@
+# yobitsugi runtime requirements.
+#
+# This file mirrors the `[project] dependencies` block in pyproject.toml. The
+# wheel installs the same set automatically — you only need this file when:
+#   • a CI step prefers `pip install -r requirements.txt` over building the wheel
+#   • a downstream image needs an explicit, lock-friendly manifest
+#   • you want to install just the deps without yobitsugi itself
+#
+# Keep the two in sync. If you change a version bound here, change it in
+# pyproject.toml too (and vice-versa).
+
+# --- Core runtime ----------------------------------------------------------
+pyyaml>=6.0
+requests>=2.31
+rich>=13.0
+
+# --- Pip-installable scanners ---------------------------------------------
+# These are the scanners listed under `install.method: pip` in
+# yobitsugi/data/scanners.yaml. Non-pip scanners (eslint, gosec, brakeman,
+# shellcheck, trufflehog, …) are not Python packages and must be installed
+# through their own runtimes — yobitsugi prints install hints for those.
+bandit>=1.7
+safety>=3.0
+pip-audit>=2.7
+semgrep>=1.50
+flawfinder>=2.0

@@ -1,13 +1,21 @@
-"""Post-run summary: render findings + fixes + validation as tables + choice menu.
+"""Post-scan summary: render findings + missing-scanner status as tables + next-action menu.
 
-Called automatically at the end of `yobitsugi run` and `yobitsugi scan`. The output
-is designed to be readable in three contexts:
+Called automatically at the end of `yobitsugi scan` and on demand via
+`yobitsugi summary <ws>`. The output is designed to be readable in three contexts:
 
   1. A terminal — rich tables with colour.
-  2. An AI assistant chat — markdown tables (no ANSI codes), so the assistant can
-     surface them verbatim or paraphrase them.
+  2. An AI assistant chat — markdown tables (no ANSI codes), so the host
+     assistant can surface them verbatim or paraphrase them.
   3. Machine consumption — a JSON variant with the same data, for the assistant
      to drive its own next-action prompt.
+
+Yobitsugi became skill-first in v0.2: fix generation, apply, and validation
+live in the host AI assistant, not the CLI. So this summary no longer reports
+"fixes applied / rolled back / validated fixed / newly introduced" — those
+files (`applied.json`, `validation.json`) aren't written by `yobitsugi scan`
+anymore. The schema preserves the keys with zero values so any external
+caller that read them still parses cleanly, but the rendered output omits
+the zero-only rows.
 """
 from __future__ import annotations
 
@@ -43,62 +51,38 @@ def _read_json(path: Path) -> Any | None:
 
 
 def build_summary(workspace: Path) -> dict:
-    """Aggregate findings / applied / validation / scan_report into one structured dict.
+    """Aggregate findings + scan_report into one structured dict.
 
-    The output is the single source of truth for both the rich/markdown renderers below
-    and the `--json` CLI flag. Every field is JSON-safe.
+    The output is the single source of truth for both the rich/markdown
+    renderers below and the `--json` CLI flag. Every field is JSON-safe.
+
+    Skill-first: this no longer reads applied.json / validation.json — those
+    aren't written by the CLI any more. The fix/apply/validate loop lives in
+    the host AI assistant. Findings carry no `outcome` or `validation` field
+    in the new schema; the assistant tracks per-fix state in the chat
+    transcript instead.
     """
     findings = _read_json(workspace / "findings.json") or []
-    applied = _read_json(workspace / "applied.json") or []
-    validation = _read_json(workspace / "validation.json") or {}
     scan_report = _read_json(workspace / "scan_report.json") or {}
-
-    # Per-finding outcome: applied / cannot_fix / not_attempted / failed.
-    applied_by_fid: dict[str, dict] = {}
-    for entry in applied:
-        fid = entry.get("finding_id")
-        if fid:
-            applied_by_fid[fid] = entry
-
-    fixed_ids = set(validation.get("fixed_ids") or [])
-    still_present = set(validation.get("still_present") or [])
-    newly_introduced = validation.get("newly_introduced") or []
 
     finding_rows: list[dict] = []
     for f in findings:
-        fid = f.get("id", "")
-        applied_entry = applied_by_fid.get(fid)
-        if applied_entry and applied_entry.get("rolled_back"):
-            outcome = "rolled_back"
-        elif applied_entry:
-            outcome = "applied"
-        else:
-            outcome = "not_attempted"
-        validation_state = (
-            "fixed" if fid in fixed_ids
-            else "still_present" if fid in still_present
-            else "n/a"
-        )
         finding_rows.append({
-            "id": fid,
+            "id": f.get("id", ""),
             "severity": f.get("severity", "UNKNOWN"),
             "type": f.get("type", "OTHER"),
             "tool": f.get("tool", "?"),
             "file": f.get("file") or "—",
             "line": f.get("line"),
-            "title": f.get("title", "") or f.get("description", "")[:80],
+            "title": f.get("title", "") or (f.get("description") or "")[:80],
             "description": f.get("description", ""),
-            "outcome": outcome,
-            "validation": validation_state,
-            "applied_files": (applied_entry or {}).get("files", []),
+            "code_snippet": f.get("code_snippet", ""),
+            "rule_id": f.get("rule_id", ""),
         })
 
-    # Severity rollup.
     counts_by_severity = Counter(r["severity"] for r in finding_rows)
     counts_by_type = Counter(r["type"] for r in finding_rows)
-    counts_by_outcome = Counter(r["outcome"] for r in finding_rows)
 
-    # Missing scanners from scan_report.json.
     scanner_reports = scan_report.get("scanners") or []
     missing_scanners = [
         {
@@ -111,28 +95,30 @@ def build_summary(workspace: Path) -> dict:
         for s in scanner_reports
         if s.get("status") == "skipped_missing_tool"
     ]
-
-    # Next-action recommendations, ranked.
-    actions = _suggest_actions(
-        workspace, finding_rows, newly_introduced, missing_scanners, counts_by_outcome,
+    scanner_status_counts = Counter(
+        s.get("status", "unknown") for s in scanner_reports
     )
+
+    actions = _suggest_actions(workspace, finding_rows, missing_scanners)
 
     return {
         "workspace": str(workspace),
         "totals": {
             "findings": len(finding_rows),
-            "applied": counts_by_outcome.get("applied", 0),
-            "rolled_back": counts_by_outcome.get("rolled_back", 0),
-            "not_attempted": counts_by_outcome.get("not_attempted", 0),
-            "fixed": len(fixed_ids),
-            "still_present": len(still_present),
-            "newly_introduced": len(newly_introduced),
+            "scanners_ok": scanner_status_counts.get("ok", 0),
+            "scanners_skipped_missing_tool": scanner_status_counts.get(
+                "skipped_missing_tool", 0
+            ),
+            "scanners_errored": (
+                scanner_status_counts.get("error", 0)
+                + scanner_status_counts.get("timeout", 0)
+                + scanner_status_counts.get("no_output", 0)
+            ),
             "missing_scanners": len(missing_scanners),
         },
         "by_severity": dict(counts_by_severity),
         "by_type": dict(counts_by_type),
         "findings": finding_rows,
-        "newly_introduced": newly_introduced,
         "missing_scanners": missing_scanners,
         "next_actions": actions,
     }
@@ -141,23 +127,18 @@ def build_summary(workspace: Path) -> dict:
 def _suggest_actions(
     workspace: Path,
     findings: list[dict],
-    newly_introduced: list[dict],
     missing_scanners: list[dict],
-    counts_by_outcome: Counter,
 ) -> list[dict]:
-    """Produce a ranked list of {label, command, why} suggestions."""
-    actions: list[dict] = []
+    """Produce a ranked list of {label, command, why} suggestions for the host
+    AI assistant to choose from.
 
-    if newly_introduced:
-        actions.append({
-            "label": f"Roll back ALL fixes — {len(newly_introduced)} new vulnerabilities were introduced",
-            "command": f"yobitsugi rollback {workspace}",
-            "why": (
-                "The validate step found vulnerabilities that didn't exist before this "
-                "run. The safest move is to undo every patch and review them by hand."
-            ),
-            "priority": "high",
-        })
+    Skill-first: there's no "rollback" or "commit the applied fixes" action
+    here, because the CLI no longer applies fixes — that's the assistant's job
+    via its own edit tool. The actions left here are the scan-side moves:
+    install missing scanners, hand the findings JSON over for the fix loop,
+    and re-scan to validate.
+    """
+    actions: list[dict] = []
 
     auto_installable_missing = [m for m in missing_scanners if m.get("install_method") == "pip"]
     if auto_installable_missing:
@@ -168,39 +149,51 @@ def _suggest_actions(
             "why": (
                 "These scanners aren't on PATH yet, so their findings were silently "
                 "missing from this run. Installing them into yobitsugi's isolated venv "
-                "lets the next scan see those issues."
+                "lets the next scan see those issues. (Or pass --ephemeral-tools "
+                "next time and we'll do it in a throwaway venv.)"
             ),
             "priority": "high",
         })
 
-    cannot_fix = [f for f in findings if f["outcome"] == "not_attempted"]
-    if cannot_fix:
+    manual_missing = [m for m in missing_scanners if m.get("install_method") != "pip"]
+    if manual_missing:
+        hints = "; ".join(
+            f"{m['name']} → {m.get('install_hint') or m.get('install_method') or 'manual'}"
+            for m in manual_missing
+        )
         actions.append({
-            "label": f"Investigate {len(cannot_fix)} unfixed finding(s) by hand",
-            "command": f"yobitsugi findings {workspace} --severity HIGH CRITICAL --json",
+            "label": f"Install {len(manual_missing)} non-Python scanner(s) via their own runtime",
+            "command": "# run each install hint by hand",
             "why": (
-                "These findings were either below the severity threshold or the LLM "
-                "returned CANNOT_FIX. Review the raw JSON to decide whether to write "
-                "manual fixes."
+                "yobitsugi doesn't manage npm/go/gem/brew installs. Install commands: "
+                + hints
             ),
             "priority": "medium",
         })
 
-    if counts_by_outcome.get("applied", 0) > 0 and not newly_introduced:
+    high_severity = [f for f in findings if f["severity"] in ("CRITICAL", "HIGH")]
+    if high_severity:
         actions.append({
-            "label": "Accept the applied fixes and commit them to git",
-            "command": "git diff   # review, then git add . && git commit",
-            "why": (
-                "Fixes were applied and validation didn't flag any new vulnerabilities. "
-                "Make a commit so the change is durable."
+            "label": (
+                f"Walk the host AI assistant through the {len(high_severity)} CRITICAL/HIGH "
+                f"finding(s) and apply fixes interactively"
             ),
-            "priority": "medium",
+            "command": f"yobitsugi findings {workspace} --severity CRITICAL HIGH --json",
+            "why": (
+                "The skill instructs the assistant to read findings.json, propose a diff "
+                "per finding, ask before applying, and apply with its own edit tool."
+            ),
+            "priority": "high",
         })
 
     actions.append({
-        "label": "Re-scan only (no fixes) to confirm the current state",
-        "command": f"yobitsugi scan {workspace.parent}",
-        "why": "Read-only — useful for a sanity check after applying or rolling back.",
+        "label": "Re-scan to confirm the current state after applying fixes",
+        "command": f"yobitsugi scan {workspace.parent} --ephemeral-tools --out {workspace}",
+        "why": (
+            "Read-only. Compare findings ids against the previous scan: ids gone are "
+            "fixed, ids still present are unresolved, ids new are regressions the "
+            "assistant's edits introduced."
+        ),
         "priority": "low",
     })
 
@@ -228,16 +221,15 @@ def render_rich(summary: dict, console: Console | None = None) -> None:
     totals_tbl.add_column("Metric", style="cyan")
     totals_tbl.add_column("Count", justify="right")
     totals_tbl.add_row("Findings (total)", str(totals["findings"]))
-    totals_tbl.add_row("Fixes applied", str(totals["applied"]))
-    totals_tbl.add_row("Fixes rolled back", str(totals["rolled_back"]))
-    totals_tbl.add_row("Findings not attempted", str(totals["not_attempted"]))
-    totals_tbl.add_row("Validated fixed", f"[green]{totals['fixed']}[/green]")
-    totals_tbl.add_row("Still present", f"[yellow]{totals['still_present']}[/yellow]")
+    totals_tbl.add_row("Scanners ok", f"[green]{totals['scanners_ok']}[/green]")
     totals_tbl.add_row(
-        "Newly introduced",
-        f"[red]{totals['newly_introduced']}[/red]" if totals["newly_introduced"] else "0",
+        "Scanners skipped (missing)",
+        f"[yellow]{totals['scanners_skipped_missing_tool']}[/yellow]",
     )
-    totals_tbl.add_row("Missing scanners", str(totals["missing_scanners"]))
+    totals_tbl.add_row(
+        "Scanners errored",
+        f"[red]{totals['scanners_errored']}[/red]" if totals["scanners_errored"] else "0",
+    )
     console.print(totals_tbl)
 
     # Severity breakdown
@@ -262,25 +254,12 @@ def render_rich(summary: dict, console: Console | None = None) -> None:
         find_tbl.add_column("Tool")
         find_tbl.add_column("File:Line", overflow="fold")
         find_tbl.add_column("Title", overflow="fold")
-        find_tbl.add_column("Fix outcome")
-        find_tbl.add_column("Validation")
         for row in summary["findings"]:
             sev = row["severity"]
             sev_styled = f"[{SEVERITY_COLOR.get(sev, 'white')}]{sev}[/]"
             loc = f"{row['file']}:{row['line']}" if row.get("line") else row["file"]
-            outcome_style = {
-                "applied": "[green]applied[/green]",
-                "rolled_back": "[yellow]rolled back[/yellow]",
-                "not_attempted": "[dim]not attempted[/dim]",
-            }.get(row["outcome"], row["outcome"])
-            valid_style = {
-                "fixed": "[green]fixed[/green]",
-                "still_present": "[yellow]still present[/yellow]",
-                "n/a": "[dim]n/a[/dim]",
-            }.get(row["validation"], row["validation"])
             find_tbl.add_row(
                 sev_styled, row["type"], row["tool"], loc, row["title"],
-                outcome_style, valid_style,
             )
         console.print(find_tbl)
 
@@ -301,19 +280,6 @@ def render_rich(summary: dict, console: Console | None = None) -> None:
             )
             ms_tbl.add_row(m["name"], method, cmd)
         console.print(ms_tbl)
-
-    # Newly introduced (loud red panel)
-    if summary["newly_introduced"]:
-        console.print(Panel(
-            "\n".join(
-                f"• {n.get('severity', '?')}  {n.get('type', '?')}  "
-                f"{n.get('file', '?')}:{n.get('line', '?')}"
-                for n in summary["newly_introduced"]
-            ),
-            title=f"[bold red]⚠  {len(summary['newly_introduced'])} NEWLY INTRODUCED — "
-                  f"the patches created these. Review immediately.[/bold red]",
-            border_style="red",
-        ))
 
     # Next-action menu
     if summary["next_actions"]:
@@ -348,12 +314,9 @@ def render_markdown(summary: dict) -> str:
     out.append("| Metric | Count |")
     out.append("| --- | ---: |")
     out.append(f"| Findings (total) | {totals['findings']} |")
-    out.append(f"| Fixes applied | {totals['applied']} |")
-    out.append(f"| Fixes rolled back | {totals['rolled_back']} |")
-    out.append(f"| Findings not attempted | {totals['not_attempted']} |")
-    out.append(f"| Validated fixed | {totals['fixed']} |")
-    out.append(f"| Still present | {totals['still_present']} |")
-    out.append(f"| **Newly introduced** | **{totals['newly_introduced']}** |")
+    out.append(f"| Scanners ok | {totals['scanners_ok']} |")
+    out.append(f"| Scanners skipped (missing tool) | {totals['scanners_skipped_missing_tool']} |")
+    out.append(f"| Scanners errored | {totals['scanners_errored']} |")
     out.append(f"| Missing scanners | {totals['missing_scanners']} |")
     out.append("")
 
@@ -373,14 +336,14 @@ def render_markdown(summary: dict) -> str:
     if summary["findings"]:
         out.append("## Findings")
         out.append("")
-        out.append("| Sev | Type | Tool | File:Line | Title | Fix outcome | Validation |")
-        out.append("| --- | --- | --- | --- | --- | --- | --- |")
+        out.append("| Sev | Type | Tool | File:Line | Title |")
+        out.append("| --- | --- | --- | --- | --- |")
         for r in summary["findings"]:
             loc = f"{r['file']}:{r['line']}" if r.get("line") else r["file"]
             title = (r["title"] or "")[:80].replace("|", "\\|")
             out.append(
                 f"| {r['severity']} | {r['type']} | {r['tool']} | "
-                f"`{loc}` | {title} | {r['outcome']} | {r['validation']} |"
+                f"`{loc}` | {title} |"
             )
         out.append("")
 
@@ -397,19 +360,6 @@ def render_markdown(summary: dict) -> str:
                 else (m.get("install_hint") or "(see project docs)")
             )
             out.append(f"| {m['name']} | {method} | {cmd} |")
-        out.append("")
-
-    # Newly introduced (loud)
-    if summary["newly_introduced"]:
-        out.append(f"## ⚠ {len(summary['newly_introduced'])} newly-introduced findings")
-        out.append("")
-        out.append("These vulnerabilities did not exist before this run — patches created them.")
-        out.append("")
-        out.append("| Severity | Type | File:Line |")
-        out.append("| --- | --- | --- |")
-        for n in summary["newly_introduced"]:
-            loc = f"{n.get('file', '?')}:{n.get('line', '?')}"
-            out.append(f"| {n.get('severity', '?')} | {n.get('type', '?')} | `{loc}` |")
         out.append("")
 
     # Next-action menu

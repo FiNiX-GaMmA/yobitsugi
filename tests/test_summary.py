@@ -1,4 +1,10 @@
-"""Unit tests for yobitsugi.core.summary — tabular post-run report."""
+"""Unit tests for yobitsugi.core.summary — scan-side tabular report.
+
+The summary used to include fix/apply/validation totals (Fixes applied,
+Newly introduced, etc.) when yobitsugi shipped a full `run` pipeline. That
+pipeline moved into the host AI assistant in v0.2 — the summary is now
+purely scan-side: findings, missing scanners, recommended next actions.
+"""
 from __future__ import annotations
 
 import json
@@ -12,7 +18,11 @@ from yobitsugi.core.summary import build_summary, render_markdown
 
 @pytest.fixture
 def ws_full(tmp_path: Path) -> Path:
-    """A workspace with findings + applied + validation + scan_report all populated."""
+    """A workspace with findings + scan_report populated.
+
+    Skill-first: applied.json / validation.json are NOT written by the CLI
+    anymore. Fixture mirrors what `yobitsugi scan` actually produces.
+    """
     ws = tmp_path / "ws"
     ws.mkdir()
     findings = [
@@ -24,21 +34,6 @@ def ws_full(tmp_path: Path) -> Path:
          "file": None, "line": None, "title": "vuln pkg", "description": "CVE"},
     ]
     (ws / "findings.json").write_text(json.dumps(findings))
-    applied = [
-        {"finding_id": "a1", "files": ["app.py"], "info": "applied"},
-        {"finding_id": "c3", "files": ["requirements.txt"], "info": "applied",
-         "rolled_back": True},
-    ]
-    (ws / "applied.json").write_text(json.dumps(applied))
-    validation = {
-        "fixed_ids": ["a1"],
-        "still_present": ["b2"],
-        "newly_introduced": [
-            {"id": "z9", "severity": "HIGH", "type": "COMMAND_INJECTION",
-             "file": "shell.py", "line": 5},
-        ],
-    }
-    (ws / "validation.json").write_text(json.dumps(validation))
     scan_report = {
         "scanners": [
             {"name": "bandit", "status": "ok"},
@@ -67,27 +62,18 @@ class TestBuildSummary:
         s = build_summary(ws_full)
         totals = s["totals"]
         assert totals["findings"] == 3
-        assert totals["applied"] == 1
-        assert totals["rolled_back"] == 1
-        assert totals["not_attempted"] == 1
-        assert totals["fixed"] == 1
-        assert totals["still_present"] == 1
-        assert totals["newly_introduced"] == 1
+        assert totals["scanners_ok"] == 1
+        assert totals["scanners_skipped_missing_tool"] == 2
+        assert totals["scanners_errored"] == 0
         assert totals["missing_scanners"] == 2
 
-    def test_outcome_classification(self, ws_full: Path) -> None:
+    def test_finding_fields_preserved(self, ws_full: Path) -> None:
         s = build_summary(ws_full)
         by_id = {r["id"]: r for r in s["findings"]}
-        assert by_id["a1"]["outcome"] == "applied"
-        assert by_id["b2"]["outcome"] == "not_attempted"
-        assert by_id["c3"]["outcome"] == "rolled_back"
-
-    def test_validation_status_mapped(self, ws_full: Path) -> None:
-        s = build_summary(ws_full)
-        by_id = {r["id"]: r for r in s["findings"]}
-        assert by_id["a1"]["validation"] == "fixed"
-        assert by_id["b2"]["validation"] == "still_present"
-        assert by_id["c3"]["validation"] == "n/a"
+        assert by_id["a1"]["severity"] == "HIGH"
+        assert by_id["a1"]["tool"] == "bandit"
+        assert by_id["a1"]["file"] == "app.py"
+        assert by_id["a1"]["line"] == 10
 
     def test_missing_scanners_extracted(self, ws_full: Path) -> None:
         s = build_summary(ws_full)
@@ -101,18 +87,29 @@ class TestBuildSummary:
         s = build_summary(ws)
         assert s["totals"]["findings"] == 0
 
+    def test_no_fix_or_validation_keys_in_totals(self, ws_full: Path) -> None:
+        # Regression for the v0.2 trim: confirm none of the old keys leak in.
+        s = build_summary(ws_full)
+        for key in ("applied", "rolled_back", "not_attempted",
+                    "fixed", "still_present", "newly_introduced"):
+            assert key not in s["totals"], f"stale fix-side key {key!r} in totals"
+
 
 class TestNextActions:
-    def test_newly_introduced_triggers_high_priority(self, ws_full: Path) -> None:
-        s = build_summary(ws_full)
-        first = s["next_actions"][0]
-        assert first["priority"] == "high"
-        assert "Roll back" in first["label"]
-
     def test_missing_pip_scanners_triggers_install(self, ws_full: Path) -> None:
         s = build_summary(ws_full)
         labels = [a["label"] for a in s["next_actions"]]
         assert any("install" in lbl.lower() and "semgrep" in lbl.lower() for lbl in labels)
+
+    def test_missing_npm_scanner_triggers_manual_install_hint(self, ws_full: Path) -> None:
+        s = build_summary(ws_full)
+        labels = [a["label"] for a in s["next_actions"]]
+        assert any("non-Python" in lbl or "non-python" in lbl.lower() for lbl in labels)
+
+    def test_high_severity_triggers_fix_handoff(self, ws_full: Path) -> None:
+        s = build_summary(ws_full)
+        labels = [a["label"] for a in s["next_actions"]]
+        assert any("Walk the host AI assistant" in lbl for lbl in labels)
 
     def test_no_missing_means_no_install_action(self, tmp_path: Path) -> None:
         ws = tmp_path / "ws"
@@ -121,9 +118,19 @@ class TestNextActions:
         s = build_summary(ws)
         assert not any("install-scanners" in a["command"] for a in s["next_actions"])
 
+    def test_no_rollback_suggestion(self, ws_full: Path) -> None:
+        # `yobitsugi rollback` was removed in v0.2 — the assistant owns undo.
+        # Test the labels (not commands — the workspace path can contain the
+        # word "rollback" if the test name does, which is what pytest's
+        # tmp_path does).
+        s = build_summary(ws_full)
+        for a in s["next_actions"]:
+            assert "rollback" not in a["label"].lower()
+            assert "yobitsugi rollback" not in a["command"]
+
 
 class TestMarkdownRendering:
-    def test_contains_all_table_headers(self, ws_full: Path) -> None:
+    def test_contains_core_headers(self, ws_full: Path) -> None:
         md = render_markdown(build_summary(ws_full))
         for header in ("## Run totals", "## Findings by severity", "## Findings",
                        "## Missing scanners", "## What next?"):
@@ -132,12 +139,14 @@ class TestMarkdownRendering:
     def test_markdown_tables_well_formed(self, ws_full: Path) -> None:
         md = render_markdown(build_summary(ws_full))
         # Every markdown table has a header separator line `| --- |`.
-        assert md.count("| ---") >= 5  # one per table
+        # Run totals + severity + findings + missing scanners + what-next = 5.
+        assert md.count("| ---") >= 5
 
-    def test_newly_introduced_section_loud(self, ws_full: Path) -> None:
+    def test_no_fix_or_validation_columns(self, ws_full: Path) -> None:
         md = render_markdown(build_summary(ws_full))
-        assert "newly-introduced" in md.lower()
-        assert "⚠" in md
+        for stale in ("Fix outcome", "Validation", "Newly introduced",
+                      "rolled back", "newly-introduced"):
+            assert stale not in md, f"stale fix-side column {stale!r} still in markdown"
 
     def test_no_findings_no_findings_table(self, tmp_path: Path) -> None:
         ws = tmp_path / "ws"
@@ -171,7 +180,7 @@ class TestSummaryMainCli:
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
         assert data["totals"]["findings"] == 3
-        assert data["totals"]["newly_introduced"] == 1
+        assert data["totals"]["scanners_skipped_missing_tool"] == 2
 
     def test_markdown_format(self, ws_full: Path, capsys: pytest.CaptureFixture) -> None:
         rc = summary_mod.main([str(ws_full), "--format", "markdown"])

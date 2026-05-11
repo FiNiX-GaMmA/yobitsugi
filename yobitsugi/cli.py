@@ -1,19 +1,44 @@
-"""yobitsugi CLI entrypoint.
+"""yobitsugi CLI entrypoint — the *thin* binary half of a skill-first tool.
+
+yobitsugi is a **skill / plugin** for agentic AI editors (Claude Code, Codex,
+Cursor, Gemini CLI, Aider, OpenCode, GitHub Copilot CLI). The skill lives as
+markdown installed into each editor's plugin location and contains the whole
+orchestration runbook — it tells the host agent how to walk a security audit
+end to end. The host agent does the talking, the explaining, and the
+generation-and-application of fixes using its own LLM and edit tools.
+
+This CLI only does the things that genuinely need a binary:
+
+  - Run SAST/SCA scanners that ship as system binaries (bandit, semgrep,
+    pip-audit, gosec, brakeman, eslint, …) and normalise their output to a
+    unified `findings.json`.
+  - Render the workspace as tables / JSON the assistant can paste into chat.
+  - Install / uninstall the skill files into each supported editor's plugin
+    location.
+  - Manage the optional isolated scanner venv at `~/.yobitsugi/tools/venv/`
+    (or, with `--ephemeral-tools`, a temp-dir variant that's deleted at the
+    end of one invocation).
+
+There is **no `yobitsugi run`**, no `apply`, no `rollback`, no LLM provider
+config and no fix generation in the CLI any more. Those responsibilities now
+live in the host AI assistant — see `data/SKILL.md` for the runbook.
 
 Subcommands:
+  yobitsugi scan <path> [--ephemeral-tools] [--out <ws>]
+  yobitsugi summary <workspace> [--format rich|markdown|json]
+  yobitsugi findings <workspace> [--severity ...] [--type ...] [--json]
+  yobitsugi list-scanners
+  yobitsugi install-scanners [--all]
+  yobitsugi uninstall-scanners
   yobitsugi install [--platform <name>] [--scope user|project]
   yobitsugi uninstall [--platform <name>] [--scope user|project]
   yobitsugi list-platforms
   yobitsugi detect-platforms
-  yobitsugi run <path> [pipeline flags]
-  yobitsugi scan <path> [--out <ws>]
-  yobitsugi findings <workspace>
-  yobitsugi rollback <workspace>
-  yobitsugi config [--print|--init]
   yobitsugi version
 
-Positional shortcut: `yobitsugi <path>` is treated as `yobitsugi run <path>` to mirror
-the graphify-style `/yobitsugi .` invocation pattern from inside an assistant.
+Positional shortcut: `yobitsugi <path>` is rewritten to `yobitsugi scan <path>`
+so the slash-command pattern (`/yobitsugi .` inside any supported assistant)
+hits the read-only scan path by default.
 """
 from __future__ import annotations
 
@@ -28,9 +53,8 @@ from yobitsugi.installers import INSTALLERS, get_installer
 
 KNOWN_SUBCOMMANDS = {
     "version", "list-platforms", "detect-platforms", "install", "uninstall",
-    "run", "scan", "findings", "rollback", "config",
+    "scan", "findings", "summary",
     "install-scanners", "uninstall-scanners", "list-scanners",
-    "summary",
 }
 
 
@@ -93,26 +117,14 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    from yobitsugi.core.pipeline import run_pipeline
-
-    def _go() -> int:
-        return run_pipeline(
-            root=args.path,
-            workspace=args.workspace,
-            severity=args.severity,
-            auto=args.auto,
-            allow_dirty=args.allow_dirty,
-            provider=args.provider,
-            model=args.model,
-            skip_tests=args.skip_tests,
-        )
-
-    return _with_optional_ephemeral_tools(_go, args, root=args.path)
-
-
 def cmd_scan(args: argparse.Namespace) -> int:
-    """Scan-only: detect → scan → parse, no LLM, no fixes."""
+    """Scan-only: detect → run scanners → parse to findings.json.
+
+    This is the entire CLI surface that a host agent needs. After this returns,
+    the workspace contains `languages.json`, `scan_report.json`, `findings.json`,
+    and per-scanner raw outputs under `raw/`. The agent reads findings.json,
+    walks the user through each finding, and applies fixes itself.
+    """
     from yobitsugi.core import detect, parse, scan
 
     workspace = args.out or (
@@ -142,7 +154,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
             print(f"\n{len(findings)} findings: " +
                   ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())))
 
-        # Detailed tabular report — same one `yobitsugi run` emits at completion.
         from yobitsugi.core import summary as summary_mod
         summary_mod.render(workspace, mode="rich")
         return 0
@@ -153,20 +164,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
 def _with_optional_ephemeral_tools(fn, args: argparse.Namespace, root: Path) -> int:
     """If --ephemeral-tools was passed, run `fn` inside an ephemeral venv that
     holds just the pip-installable scanners we need, then delete it. Otherwise
-    run `fn` against the persistent ~/.yobitsugi/tools/venv/ (or the user's PATH).
-
-    Both behaviours go through this single wrapper so the slash-command-style
-    invocation pattern ("/yobitsugi . — install, scan, fix, clean up") is the
-    one-flag path it claims to be.
-    """
+    run `fn` against the persistent ~/.yobitsugi/tools/venv/ (or the user's PATH)."""
     if not getattr(args, "ephemeral_tools", False):
         return fn()
 
     from yobitsugi.core import tools
 
-    # Pre-load the registry and detect languages once so we can install only the
-    # scanners the repo will actually use. Detection re-runs inside the pipeline
-    # too, but that's cheap and keeps the install step language-aware here.
     registry = _load_scanner_registry()
     languages = _quick_detect_languages(root)
 
@@ -187,9 +190,9 @@ def _with_optional_ephemeral_tools(fn, args: argparse.Namespace, root: Path) -> 
 
 
 def _quick_detect_languages(root: Path) -> list[str]:
-    """Lightweight wrapper around detect.detect so the ephemeral-tools pre-install
-    can target the right scanners. Returns [] on any error so the caller falls
-    back to installing every pip scanner."""
+    """Pre-sniff languages so the ephemeral install only pulls the scanners
+    the repo actually needs. Returns [] on any error so the caller falls back
+    to installing every pip scanner."""
     try:
         from yobitsugi.core import detect
 
@@ -225,7 +228,7 @@ def cmd_findings(args: argparse.Namespace) -> int:
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
-    """Render the workspace's findings/applied/validation/scan_report as tables."""
+    """Render the workspace's findings/scan_report as tables."""
     from yobitsugi.core import summary as summary_mod
 
     if not args.workspace.is_dir():
@@ -233,16 +236,6 @@ def cmd_summary(args: argparse.Namespace) -> int:
         return 1
     summary_mod.render(args.workspace, mode=args.format)
     return 0
-
-
-def cmd_rollback(args: argparse.Namespace) -> int:
-    from yobitsugi.core import apply as apply_mod
-
-    return apply_mod.main([
-        "--rollback",
-        "--workspace", str(args.workspace),
-        "--root", str(args.root or Path.cwd()),
-    ])
 
 
 def _load_scanner_registry() -> dict:
@@ -267,7 +260,6 @@ def cmd_list_scanners(_args: argparse.Namespace) -> int:
     print(f"{'scanner':<14}  {'method':<8}  {'installed':<11}  {'package / hint'}")
     print("-" * 90)
     for plan in plans:
-        # `installed` means: binary is reachable on PATH OR sits in the managed venv.
         on_path = _shutil.which(plan.name) is not None
         in_venv = venv_bin is not None and (venv_bin / plan.name).exists()
         installed = "yes" if (on_path or in_venv) else "no"
@@ -279,19 +271,13 @@ def cmd_list_scanners(_args: argparse.Namespace) -> int:
 
 
 def cmd_install_scanners(args: argparse.Namespace) -> int:
-    """Auto-install the Python scanners into yobitsugi's isolated venv.
-
-    For non-Python scanners, print install hints — yobitsugi won't manage a Node /
-    Go / gem / cargo / brew install on the user's behalf.
-    """
+    """Auto-install the Python scanners into yobitsugi's isolated venv."""
     import shutil as _shutil
 
     from yobitsugi.core import tools
 
     registry = _load_scanner_registry()
 
-    # Filter to "missing" scanners unless --all was passed: a scanner is "missing"
-    # when its binary isn't on the user's PATH AND isn't in our managed venv.
     if args.all:
         targets = tools.build_install_plans(registry)
     else:
@@ -351,44 +337,14 @@ def cmd_uninstall_scanners(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_config(args: argparse.Namespace) -> int:
-    cfg_path = Path.home() / ".yobitsugi" / "config.yaml"
-
-    if args.init:
-        if cfg_path.exists() and not args.force:
-            print(f"{cfg_path} already exists. Pass --force to overwrite.", file=sys.stderr)
-            return 1
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            "# yobitsugi config — see yobitsugi/data/providers.md for options.\n"
-            "provider: openai\n"
-            "model: gpt-4o-mini\n"
-            "# api_key: ...           # prefer env vars: OPENAI_API_KEY, ANTHROPIC_API_KEY, ...\n"
-            "# base_url: http://localhost:1234/v1   # for openai-compatible endpoints\n"
-        )
-        print(f"wrote {cfg_path}")
-        return 0
-
-    from yobitsugi.core.llm import resolve_config
-    try:
-        cfg = resolve_config()
-    except SystemExit as e:
-        return int(e.code) if e.code else 1
-    print(json.dumps({
-        "provider": cfg.provider,
-        "model": cfg.model,
-        "base_url": cfg.base_url,
-        "api_key_set": bool(cfg.api_key),
-    }, indent=2))
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="yobitsugi",
         description=(
-            "AI coding assistant skill for finding and fixing repo vulnerabilities. "
-            "Works with Claude Code, Codex, Cursor, Gemini CLI, Aider, OpenCode, and more."
+            "Skill-first SAST/SCA tool. The CLI here only scans and reports — "
+            "fix generation and application live in the host AI assistant. "
+            "Works with Claude Code, Codex, Cursor, Gemini CLI, Aider, OpenCode, "
+            "and GitHub Copilot CLI."
         ),
     )
     sub = p.add_subparsers(dest="cmd")
@@ -403,44 +359,28 @@ def build_parser() -> argparse.ArgumentParser:
                    ).set_defaults(func=cmd_detect_platforms)
 
     p_install = sub.add_parser(
-        "install", help="Register the /yobitsugi command with an AI assistant.")
+        "install",
+        help="Register the /yobitsugi skill with an AI assistant.",
+    )
     p_install.add_argument("--platform", choices=sorted(INSTALLERS),
                            help="Install for one specific assistant. Default: every detected one.")
     p_install.add_argument("--scope", choices=["user", "project"], default="user",
                            help="Install globally (user) or in the current repo (project).")
     p_install.set_defaults(func=cmd_install)
 
-    p_uninstall = sub.add_parser("uninstall", help="Remove the /yobitsugi command.")
+    p_uninstall = sub.add_parser("uninstall", help="Remove the /yobitsugi skill.")
     p_uninstall.add_argument("--platform", choices=sorted(INSTALLERS))
     p_uninstall.add_argument("--scope", choices=["user", "project"], default="user")
     p_uninstall.set_defaults(func=cmd_uninstall)
 
-    p_run = sub.add_parser(
-        "run", help="End-to-end: detect → scan → parse → fix → apply → tests → validate.")
-    p_run.add_argument("path", type=Path, help="Repo root.")
-    p_run.add_argument("--workspace", type=Path)
-    p_run.add_argument("--severity", nargs="*", default=["CRITICAL", "HIGH"])
-    p_run.add_argument("--auto", action="store_true",
-                       help="Apply fixes without confirmation. Use cautiously.")
-    p_run.add_argument("--allow-dirty", action="store_true",
-                       help="Don't refuse to run on a dirty git tree.")
-    p_run.add_argument("--provider",
-                       help="openai | anthropic | google | ollama | openai-compatible")
-    p_run.add_argument("--model", help="Model name (provider-specific).")
-    p_run.add_argument("--skip-tests", action="store_true")
-    p_run.add_argument(
-        "--ephemeral-tools", action="store_true",
+    p_scan = sub.add_parser(
+        "scan",
         help=(
-            "Install required pip scanners into a throwaway venv just for this "
-            "run, then delete it when the report is written. Keeps the user's "
-            "Python env and ~/.yobitsugi/tools/ untouched. Recommended for the "
-            "slash-command-style `/yobitsugi .` invocation."
+            "Detect languages, run scanners, normalise to findings.json. "
+            "This is the only scanning entrypoint — fix generation is owned "
+            "by the host AI assistant via the installed skill."
         ),
     )
-    p_run.set_defaults(func=cmd_run)
-
-    p_scan = sub.add_parser("scan",
-                            help="Scan-only — produce findings.json without applying fixes.")
     p_scan.add_argument("path", type=Path)
     p_scan.add_argument("--out", type=Path,
                         help="Workspace dir (default: ~/.yobitsugi/<name>-<ts>/).")
@@ -448,7 +388,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--ephemeral-tools", action="store_true",
         help=(
             "Install required pip scanners into a throwaway venv just for this "
-            "scan, then delete it when findings.json is written."
+            "scan, then delete it when findings.json is written. Recommended "
+            "default for the slash-command-style `/yobitsugi .` invocation."
         ),
     )
     p_scan.set_defaults(func=cmd_scan)
@@ -460,17 +401,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_find.add_argument("--json", action="store_true", help="Output raw JSON.")
     p_find.set_defaults(func=cmd_findings)
 
-    p_rb = sub.add_parser("rollback",
-                          help="Restore .yobitsugi.bak files from a workspace's applied.json.")
-    p_rb.add_argument("workspace", type=Path)
-    p_rb.add_argument("--root", type=Path, help="Repo root (defaults to CWD).")
-    p_rb.set_defaults(func=cmd_rollback)
-
     p_sum = sub.add_parser(
         "summary",
         help=(
-            "Render a detailed post-run report (findings, fix outcomes, validation, "
-            "missing scanners, recommended next actions) as tables."
+            "Render the workspace report (findings, missing scanners, recommended "
+            "next actions) as tables for the host assistant to display."
         ),
     )
     p_sum.add_argument("workspace", type=Path)
@@ -483,12 +418,6 @@ def build_parser() -> argparse.ArgumentParser:
              "'json' = structured data.",
     )
     p_sum.set_defaults(func=cmd_summary)
-
-    p_cfg = sub.add_parser("config", help="Show or initialise yobitsugi config.")
-    p_cfg.add_argument("--init", action="store_true",
-                       help="Write a starter ~/.yobitsugi/config.yaml.")
-    p_cfg.add_argument("--force", action="store_true", help="Overwrite existing config.")
-    p_cfg.set_defaults(func=cmd_config)
 
     sub.add_parser(
         "list-scanners",
@@ -518,11 +447,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Positional shortcut: `yobitsugi <path>` → `yobitsugi run <path>`.
+    # Positional shortcut: `yobitsugi <path>` → `yobitsugi scan <path>`.
+    # Previously this aliased to `run`, but the end-to-end pipeline has moved
+    # into the skill (the host assistant orchestrates fix generation).
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] not in KNOWN_SUBCOMMANDS and not argv[0].startswith("-"):
-        argv = ["run", *argv]
+        argv = ["scan", *argv]
 
     parser = build_parser()
     args = parser.parse_args(argv)

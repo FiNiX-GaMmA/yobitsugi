@@ -1,8 +1,22 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 — 2026-05-11
+
+The skill-first cut. This is a breaking release: the end-to-end `yobitsugi run` pipeline, the bundled LLM client, `apply`/`rollback`/`config` subcommands, and the LLM-provider optional-deps (`openai`, `anthropic`) are all gone. Fix generation and edit application move entirely into the host AI assistant via the installed skill. The CLI is now a thin scanner-runner: detect → scan → parse → summary, nothing more. Bumping to 1.0 to signal the new contract per SemVer — `0.x` was the pre-stable line.
+
+If you previously used `yobitsugi run`, the migration is: install the skill (`yobitsugi install`) and type `/yobitsugi <path>` inside Claude Code / Codex / Cursor / Gemini CLI / Aider / OpenCode / GitHub Copilot CLI. The assistant follows the runbook in `data/SKILL.md` and walks you through scans + fixes interactively, using its own model.
+
+### Changed
+- **Yobitsugi is now skill-first.** The end-to-end pipeline (detect → scan → parse → fix → apply → tests → validate) moved out of the CLI and into the skill itself — fix generation, diff display, per-fix approval, and edit application now happen inside the host AI assistant (Claude Code, Codex, Cursor, Gemini CLI, Aider, OpenCode, GitHub Copilot CLI) using its own LLM and edit tool. The `yobitsugi` binary is now a thin sub-tool that only does what genuinely needs a binary: running SAST/SCA scanners, normalising their output to `findings.json`, and rendering summary tables.
 
 ### Removed
+- `yobitsugi run` subcommand (end-to-end pipeline). Use the installed skill instead — the host agent orchestrates the same flow with its own model.
+- `yobitsugi rollback` subcommand. The assistant's native edit tool owns its own undo (and most agentic IDEs already track edit history).
+- `yobitsugi config` subcommand. There is no LLM provider config for yobitsugi any more — the host agent uses its own.
+- `yobitsugi/core/fix.py`, `core/apply.py`, `core/tests_gen.py`, `core/validate.py`, `core/pipeline.py`, `core/llm.py` — the entire LLM and fix-application stack.
+- `yobitsugi/data/fix_prompts.md`, `data/test_templates.md`, `data/providers.md` — supporting data for the deleted LLM stack.
+- `openai` and `anthropic` optional-dependency extras in `pyproject.toml`. No LLM SDK is bundled.
+- The `applied.json` / `validation.json` / `tests/` artifacts in workspace dirs (they were only written by the deleted pipeline). `summary` no longer reports "Fixes applied" / "Newly introduced" — those metrics belong to the host assistant's chat transcript now.
 - **npm installation path dropped entirely.** The `npm/` wrapper directory, the `publish-npm` job in `publish.yml`, the `NPM_TOKEN` secret requirement, and every `npx yobitsugi <args>` reference in README / SKILL.md are gone. Python remains the only supported install path: `pipx install yobitsugi`, `uv tool install yobitsugi`, or `pip install yobitsugi`. Mentions of `npm audit` and `eslint`-via-npm are unchanged — those refer to the *scanner* ecosystem yobitsugi orchestrates against Node projects, not to how yobitsugi itself is installed.
 
 ### Fixed

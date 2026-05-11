@@ -23,15 +23,47 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
+    # Core runtime — always required.
     "pyyaml>=6.0",
     "requests>=2.31",
     "rich>=13.0",
+    # Pip-installable scanners. These are bundled as direct dependencies so
+    # `pip install yobitsugi` (or the wheel) is one step to a working scan.
+    # If you want a leaner install, drop these from the install line and use
+    # `yobitsugi install-scanners` (persistent venv) or
+    # `yobitsugi run/scan --ephemeral-tools` (throwaway venv) instead.
+    "bandit>=1.7",
+    "safety>=3.0",
+    "pip-audit>=2.7",
+    "semgrep>=1.50",
+    "flawfinder>=2.0",
 ]
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.30"]
-openai = ["openai>=1.0"]
-all = ["anthropic>=0.30", "openai>=1.0"]
+# `scanners` is an alias of the pip scanners that are already in the base
+# install — kept here so callers can declare the dependency explicitly (for
+# documentation, CI matrix entries, or downstream extras unions) without
+# adding anything new. If the base `dependencies` ever drops them, this is
+# the opt-in install path: `pip install "yobitsugi[scanners]"`.
+#
+# There used to be `openai` and `anthropic` extras for the bundled LLM
+# client. That client (core/llm.py) was removed when yobitsugi became
+# skill-first in v0.2 — fix generation now happens in the host AI assistant
+# using its own LLM, so there's no LLM SDK for yobitsugi to depend on.
+scanners = [
+    "bandit>=1.7",
+    "safety>=3.0",
+    "pip-audit>=2.7",
+    "semgrep>=1.50",
+    "flawfinder>=2.0",
+]
+all = [
+    "bandit>=1.7",
+    "safety>=3.0",
+    "pip-audit>=2.7",
+    "semgrep>=1.50",
+    "flawfinder>=2.0",
+]
 dev = ["pytest>=7", "ruff>=0.4", "mypy>=1.8"]
 
 [project.scripts]

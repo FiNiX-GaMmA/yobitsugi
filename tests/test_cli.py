@@ -38,16 +38,19 @@ class TestDetectPlatforms:
 
 
 class TestPositionalShortcut:
-    def test_path_becomes_run(
+    def test_path_becomes_scan(
         self, tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Bare `yobitsugi <path>` is now sugar for `yobitsugi scan <path>` —
+        # the old `run` pipeline (which called LLMs and applied diffs) moved
+        # entirely into the host AI assistant via the skill.
         captured: dict = {}
 
-        def fake_run(args):
+        def fake_scan(args):
             captured["path"] = args.path
             return 0
 
-        monkeypatch.setattr(cli, "cmd_run", fake_run)
+        monkeypatch.setattr(cli, "cmd_scan", fake_scan)
         rc = cli.main([str(tmp_repo)])
         assert rc == 0
         assert captured["path"] == tmp_repo
@@ -59,41 +62,6 @@ class TestPositionalShortcut:
         # Should hit normal argparse error handling.
         with pytest.raises(SystemExit):
             cli.main(["--badflag"])
-
-
-class TestConfigCommand:
-    def test_init_writes_config(
-        self, fake_home: Path, capsys: pytest.CaptureFixture
-    ) -> None:
-        rc = cli.main(["config", "--init"])
-        assert rc == 0
-        cfg = fake_home / ".yobitsugi" / "config.yaml"
-        assert cfg.exists()
-        assert "provider" in cfg.read_text()
-
-    def test_init_refuses_overwrite_without_force(
-        self, fake_home: Path
-    ) -> None:
-        cli.main(["config", "--init"])
-        rc = cli.main(["config", "--init"])
-        assert rc == 1
-
-    def test_init_with_force_overwrites(self, fake_home: Path) -> None:
-        cli.main(["config", "--init"])
-        rc = cli.main(["config", "--init", "--force"])
-        assert rc == 0
-
-    def test_print_resolves_config(
-        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture,
-    ) -> None:
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        rc = cli.main(["config"])
-        assert rc == 0
-        out = capsys.readouterr().out
-        data = json.loads(out)
-        assert data["provider"] == "openai"
-        assert data["api_key_set"] is True
 
 
 class TestFindingsCommand:
@@ -153,24 +121,23 @@ class TestNoSubcommand:
         assert "yobitsugi" in out.lower() or "Usage" in out or "usage" in out
 
 
-class TestRunCommand:
-    def test_run_dispatches_to_pipeline(
-        self, tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        captured: dict = {}
+class TestRunCommandRemoved:
+    """`yobitsugi run` was removed when the project became skill-first.
 
-        def fake_pipeline(**kwargs):
-            captured.update(kwargs)
-            return 0
+    The end-to-end pipeline (detect → scan → parse → fix → apply → tests →
+    validate) lived in core/pipeline.py and called an LLM via core/llm.py to
+    generate fix diffs. That whole loop now lives in the host AI assistant
+    via the installed skill (data/SKILL.md). The CLI no longer ships a `run`
+    subcommand, and bare `yobitsugi <path>` is sugar for `scan`, not `run`.
+    """
 
-        # cmd_run imports run_pipeline lazily, so patch on the module.
-        import yobitsugi.core.pipeline as p
-        monkeypatch.setattr(p, "run_pipeline", fake_pipeline)
-        rc = cli.main(["run", str(tmp_repo), "--auto", "--allow-dirty"])
-        assert rc == 0
-        assert captured["root"] == tmp_repo
-        assert captured["auto"] is True
-        assert captured["allow_dirty"] is True
+    def test_run_subcommand_no_longer_exists(self) -> None:
+        # argparse rejects unknown subcommands by exiting with code 2 and
+        # writing to stderr. `run` should not be in KNOWN_SUBCOMMANDS, so the
+        # positional-shortcut path also won't intercept it.
+        assert "run" not in cli.KNOWN_SUBCOMMANDS
+        with pytest.raises(SystemExit):
+            cli.main(["run", "."])
 
 
 class TestScannerToolingCommands:

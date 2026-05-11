@@ -1,348 +1,250 @@
-<!--
-  yobitsugi — README
-  Style: Apache Airflow (badges block, ToC, sectioned layout with anchors).
--->
-
 <p align="center">
   <h1 align="center">yobitsugi</h1>
   <p align="center"><em>呼継ぎ — "called-in joinery."</em></p>
-  <p align="center">AI coding assistant skill that scans a repository with industry SAST/SCA tools<br/>and patches the findings using your assistant's LLM.</p>
 </p>
 
-<div align="center">
+<p align="center">
+  <a href="https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml"><img src="https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="https://pypi.org/project/yobitsugi/"><img src="https://img.shields.io/pypi/v/yobitsugi?label=pypi&color=blue&cacheSeconds=3600" alt="PyPI"/></a>
+  <a href="https://pypi.org/project/yobitsugi/"><img src="https://img.shields.io/pypi/pyversions/yobitsugi?color=blue&cacheSeconds=3600" alt="Python versions"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/pypi/l/yobitsugi?color=green&cacheSeconds=3600" alt="License: MIT"/></a>
+  <a href="https://github.com/FiNiX-GaMmA"><img src="https://img.shields.io/github/followers/FiNiX-GaMmA?label=Follow%20%40FiNiX-GaMmA&style=flat&color=blue&cacheSeconds=3600" alt="GitHub followers"/></a>
+</p>
 
-[![PyPI version](https://img.shields.io/pypi/v/yobitsugi?label=pypi&color=blue&cacheSeconds=3600)](https://pypi.org/project/yobitsugi/)
-[![Python versions](https://img.shields.io/pypi/pyversions/yobitsugi?color=blue&cacheSeconds=3600)](https://pypi.org/project/yobitsugi/)
-[![License: MIT](https://img.shields.io/pypi/l/yobitsugi?color=green&cacheSeconds=3600)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/FiNiX-GaMmA/yobitsugi?style=flat&color=yellow&cacheSeconds=3600)](https://github.com/FiNiX-GaMmA/yobitsugi/stargazers)
-[![GitHub followers](https://img.shields.io/github/followers/FiNiX-GaMmA?label=Follow%20%40FiNiX-GaMmA&style=flat&color=blue&cacheSeconds=3600)](https://github.com/FiNiX-GaMmA)
+<p align="center">
+  <a href="https://star-history.com/#FiNiX-GaMmA/yobitsugi&Date">
+    <img src="https://api.star-history.com/svg?repos=FiNiX-GaMmA/yobitsugi&type=Date" alt="Star History Chart" width="370"/>
+  </a>
+</p>
 
-[![CI](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml/badge.svg)](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/ci.yml)
-[![Release & Publish](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml/badge.svg)](https://github.com/FiNiX-GaMmA/yobitsugi/actions/workflows/publish.yml)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg)](https://github.com/astral-sh/ruff)
-[![Type-checked: mypy](https://img.shields.io/badge/type--checked-mypy-1f5082.svg)](http://mypy-lang.org/)
-[![Tests: pytest](https://img.shields.io/badge/tests-pytest-0A9EDC.svg)](https://docs.pytest.org/)
+Type `/yobitsugi` in your AI coding assistant and it scans your repo with industry SAST/SCA tools, then walks you through fixes one at a time using your assistant's own model.
 
+Works in Claude Code, Codex, Cursor, Gemini CLI, Aider, OpenCode, and GitHub Copilot CLI.
 
-</div>
-
-<br/>
-
-> A Japanese pottery technique: when a broken vessel can't be repaired with its own fragments, pieces from a different vessel are *called in* and joined to complete the whole. The repair is honest about its origin — the foreign piece is visible, often a different colour or pattern, and the new vessel is more interesting for it. That's what this tool does. The original code has a crack (a vulnerability). The LLM is the foreign vessel — its patch comes from elsewhere, joined to your code at the seam. Backups, the `applied.json` log, the regression test, and the re-scan all keep the join visible and accountable.
-
----
-
-## Table of Contents
-
-- [What is yobitsugi?](#what-is-yobitsugi)
-- [Project focus](#project-focus)
-- [Requirements](#requirements)
-- [Installing from PyPI](#installing-from-pypi)
-- [Installing from source](#installing-from-source)
-- [Quick start](#quick-start)
-- [Supported AI coding assistants](#supported-ai-coding-assistants)
-- [Supported scanners](#supported-scanners)
-- [Installing scanners](#installing-scanners)
-- [Ephemeral tools mode](#ephemeral-tools-mode)
-- [Configure the LLM provider](#configure-the-llm-provider)
-- [Common commands](#common-commands)
-- [Architecture overview](#architecture-overview)
-- [Safety guarantees](#safety-guarantees)
-- [The unified Finding schema](#the-unified-finding-schema)
-- [Privacy](#privacy)
-- [Development](#development)
-- [Testing](#testing)
-- [Test layout](#test-layout)
-- [Releasing](#releasing)
-- [Semantic versioning](#semantic-versioning)
-- [Python version lifecycle](#python-version-lifecycle)
-- [Contributing](#contributing)
-- [License](#license)
-
----
-
-## What is yobitsugi?
-
-`yobitsugi` is a CLI and an **AI coding assistant skill** that:
-
-1. **Detects** the languages in a repo.
-2. **Scans** it with real, industry-standard SAST and SCA tools (bandit, semgrep, gosec, brakeman, npm audit, pip-audit, trufflehog, and more).
-3. **Normalises** every scanner's output into a single Finding schema.
-4. **Patches** each finding by asking an LLM (your provider, your key) to generate a unified diff.
-5. **Applies** that diff safely — with backups, a rollback log, and a dirty-tree guard.
-6. **Generates a regression test** that would have caught the original bug.
-7. **Re-scans** to verify the fix actually closed the finding and didn't introduce a new one.
-
-It ships as a slash command — `/yobitsugi .` — for Claude Code, Codex, Cursor, Gemini CLI, Aider, OpenCode, and GitHub Copilot CLI. The same `yobitsugi` CLI also works standalone outside any assistant.
-
-```bash
-/yobitsugi .                                 # inside any supported assistant
-yobitsugi run ./services/api                 # standalone
-yobitsugi run ./services/api --auto          # apply fixes without prompting
-yobitsugi scan ./services/api                # scan-only, no LLM calls
+```
+/yobitsugi .
 ```
 
----
-
-## Project focus
-
-- **Honest joinery.** The LLM patch is a *visible* repair — every change is logged, backed up, and re-verified.
-- **No vendor lock-in.** Bring your own LLM. Bring your own scanners.
-- **Offline-first scanning.** Only the fix step touches the network.
-- **Single source of truth.** Each finding has a stable `id` so re-runs compute true `fixed_ids` / `still_present` / `newly_introduced` sets.
-- **Testable.** Every core stage is a pure-ish function with a deliberate boundary. The pipeline runs in-process — no subprocess fork-bombs.
-
----
-
-## Requirements
-
-| Component | Requirement |
-| --- | --- |
-| Python | **3.11+** (tested on 3.11, 3.12, 3.13) |
-| `git` | Required if you want the dirty-tree safety check |
-| `patch` or `git apply` | Required for diff application |
-| Scanner binaries | Optional per language — missing tools are skipped, not fatal |
-| LLM provider | OpenAI / Anthropic / Google / Ollama / any OpenAI-compatible endpoint |
-
----
-
-## Installing from PyPI
-
-```bash
-pipx install yobitsugi && yobitsugi install
-# or
-uv tool install yobitsugi && yobitsugi install
-# or
-pip install yobitsugi && yobitsugi install
-```
-
-Or drop the repo in directly as a Claude Code skill:
-
-```bash
-git clone https://github.com/FiNiX-GaMmA/yobitsugi ~/.claude/skills/yobitsugi
-```
-
-`yobitsugi install` auto-detects every supported assistant on your machine and registers the skill for each. Pass `--platform <name>` to install for one specifically, or `--scope project` to install into the current repo's config instead of your home dir.
-
----
-
-## Installing from source
-
-```bash
-git clone https://github.com/FiNiX-GaMmA/yobitsugi
-cd yobitsugi
-pip install -e ".[dev]"
-yobitsugi version
-```
-
----
-
-## Quick start
-
-```bash
-# 1. Make sure you have an LLM key in your environment.
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# 2. Scan + fix a repo, prompting before each patch.
-yobitsugi run ./my-project
-
-# 3. Or, scan only — no LLM, no edits.
-yobitsugi scan ./my-project
-
-# 4. Inspect what was found.
-yobitsugi findings ~/.yobitsugi/my-project-20260511-100501
-```
-
-You get a workspace directory:
+That's it. You get a workspace dir:
 
 ```
 ~/.yobitsugi/<repo>-<timestamp>/
-├── languages.json    detected languages with file counts
-├── scan_report.json  per-scanner status (ok / skipped_missing_tool / errored)
 ├── findings.json     unified, deduplicated list of vulnerabilities    ← the cracks
-├── applied.json      rollback log — one entry per applied patch        ← the called-in pieces
-└── validation.json   fixed_ids, still_present, newly_introduced        ← did the joins hold?
+├── scan_report.json  per-scanner status (ok / skipped_missing_tool / errored)
+├── languages.json    detected languages with file counts
+└── raw/*             original scanner outputs, untouched, for forensic review
 ```
+
+Your assistant then reads `findings.json`, summarises it in chat, proposes a unified diff for each CRITICAL/HIGH finding, asks before applying, and applies the edit with its own native edit tool. There's no separate LLM for yobitsugi — your editor's model does all the talking.
 
 ---
 
-## Supported AI coding assistants
+## Install
+
+**Requires Python 3.11+**
+
+```bash
+pipx install yobitsugi && yobitsugi install
+# or: uv tool install yobitsugi && yobitsugi install
+# or: pip install yobitsugi && yobitsugi install
+# or: uvx yobitsugi <args>   (ephemeral, no install)
+```
+
+> **`yobitsugi: command not found`?** Use `pipx install yobitsugi` or `uv tool install yobitsugi` — both put the CLI on PATH automatically. With plain `pip`, add `~/.local/bin` (Linux) or `~/Library/Python/3.x/bin` (Mac) to your PATH, or run `python -m yobitsugi`.
+
+> **PowerShell note:** Use `yobitsugi scan .` not `/yobitsugi .` outside an assistant chat — the leading slash is a path separator in PowerShell.
+
+> **Codex note:** Add `multi_agent = true` under `[features]` in `~/.codex/config.toml`. Codex uses `$yobitsugi` instead of `/yobitsugi`.
+
+### Pick your platform
 
 | Platform | Install command |
-| --- | --- |
+|----------|-----------------|
 | Claude Code | `yobitsugi install --platform claude` |
 | Codex | `yobitsugi install --platform codex` |
-| Cursor | `yobitsugi install --platform cursor` |
+| Cursor | `yobitsugi install --platform cursor --scope project` |
 | Gemini CLI | `yobitsugi install --platform gemini` |
 | Aider | `yobitsugi install --platform aider` |
 | OpenCode | `yobitsugi install --platform opencode` |
 | GitHub Copilot CLI | `yobitsugi install --platform copilot` |
 
-Uninstall with `yobitsugi uninstall --platform <name>`. List everything with `yobitsugi list-platforms`.
+Bare `yobitsugi install` auto-detects every assistant on your machine and registers the skill for each. Add `--scope project` to install into the current repo instead of your home dir. Remove with `yobitsugi uninstall --platform <name>`. List everything with `yobitsugi list-platforms`.
 
 ---
 
-## Supported scanners
+## What the skill does
 
-Auto-detected per language. Missing binaries are skipped, not fatal — and yobitsugi can install most of them for you in an isolated venv (see [Installing scanners](#installing-scanners) below).
+When you type `/yobitsugi <path>`, the host assistant follows a five-step runbook installed as a markdown skill file. It's exactly what a careful security review looks like:
+
+1. **Announces the plan** and asks if you want to proceed. A throwaway scanner venv will be created and deleted at the end of the run — your system Python stays untouched.
+2. **Runs `yobitsugi scan <path> --ephemeral-tools`** which detects languages, runs every matching SAST/SCA scanner, normalises the output to `findings.json`, and prints a markdown summary.
+3. **Asks if you want fixes.** Shows the totals (CRITICAL / HIGH / MEDIUM / LOW) and the markdown table of every finding.
+4. **Walks each finding interactively.** For every CRITICAL/HIGH finding: one-paragraph plain-English explanation, proposed unified diff inline, then "Apply this fix?" — yes/no/skip/explain-more. The assistant uses its own model and its own native edit tool. The `yobitsugi` binary never edits a file.
+5. **Re-scans to confirm.** Compares finding ids before and after: any ids gone are *fixed*, any still present are *unresolved*, any new ones are *regressions* the assistant's edits introduced. Flags regressions loudly.
+
+The temp scanner venv is removed in a `finally` block at the end — on success, failure, or Ctrl-C alike.
+
+---
+
+## What scanners it runs
+
+Auto-detected per language. Missing binaries are skipped, not fatal — most are installed for you automatically in a throwaway venv when you pass `--ephemeral-tools`.
 
 | Language | Scanners |
-| --- | --- |
+|----------|----------|
 | Python | `bandit`, `safety`, `pip-audit`, `semgrep` |
 | JavaScript / TypeScript | `eslint` (security plugins), `npm audit`, `semgrep` |
 | Go | `gosec`, `govulncheck`, `semgrep` |
 | Java | `spotbugs` (with FindSecBugs), `semgrep` |
 | Ruby | `brakeman`, `bundler-audit`, `semgrep` |
-| PHP | `phpstan` (security extension), `semgrep` |
+| PHP | `phpstan` (security), `semgrep` |
 | C / C++ | `flawfinder`, `cppcheck`, `semgrep` |
 | Rust | `cargo-audit`, `semgrep` |
 | Shell | `shellcheck`, `semgrep` |
-| Cross-language | `semgrep`, `trufflehog` (secrets scanning) |
+| Cross-language | `semgrep`, `trufflehog` (secrets) |
+
+Pip-installable scanners (`bandit`, `safety`, `pip-audit`, `semgrep`, `flawfinder`) ship as direct dependencies of the `yobitsugi` wheel and land on `PATH` automatically. Non-Python scanners (eslint, gosec, brakeman, shellcheck, …) need their own runtime — `yobitsugi list-scanners` shows install hints.
 
 Adding a new scanner is one YAML block in [`yobitsugi/data/scanners.yaml`](yobitsugi/data/scanners.yaml) — no code change needed unless the output format is exotic.
 
 ---
 
-## Installing scanners
+## What's in the summary
 
-yobitsugi orchestrates scanners — it doesn't bundle their binaries. When you run `yobitsugi scan` and a scanner isn't on `PATH`, that scanner is silently skipped. To check the situation:
+`yobitsugi summary <workspace> --format markdown` (which the skill runs for you) prints five tables:
 
-```bash
-yobitsugi list-scanners       # every scanner, install method, and whether it's available
-```
+- **Run totals** — findings count, scanners ok / skipped / errored.
+- **Findings by severity** — counts per CRITICAL / HIGH / MEDIUM / LOW.
+- **Findings** — one row per finding: severity, type, scanner, file:line, title.
+- **Missing scanners** — every scanner that was skipped because its binary isn't installed, with the install command or hint.
+- **What next?** — ranked next actions: install missing scanners, hand findings to the assistant for the fix loop, re-scan to validate.
 
-To install the **Python-based** scanners (bandit, safety, pip-audit, semgrep, flawfinder) in one shot, into an isolated venv at `~/.yobitsugi/tools/venv/`:
-
-```bash
-yobitsugi install-scanners    # installs only missing ones
-yobitsugi install-scanners --all   # reinstall/upgrade everything
-
-yobitsugi uninstall-scanners  # wipes ~/.yobitsugi/tools/ entirely
-```
-
-After `install-scanners` succeeds, every subsequent `yobitsugi scan` or `yobitsugi run` automatically prepends the venv's `bin/` to `PATH` for scanner subprocesses — you don't need to activate anything yourself, and the venv never pollutes your main Python environment.
-
-**Non-Python scanners need their own runtime** and yobitsugi will print install hints rather than try to bootstrap six different package managers badly:
-
-| Runtime | Scanners | Install yourself with |
-| --- | --- | --- |
-| Node | `eslint` | `npm install -g eslint eslint-plugin-security` |
-| Go | `gosec`, `govulncheck` | `go install github.com/securego/gosec/v2/cmd/gosec@latest` etc. |
-| Cargo | `cargo-audit` | `cargo install cargo-audit` |
-| Ruby | `brakeman`, `bundler-audit` | `gem install brakeman bundler-audit` |
-| System | `shellcheck`, `cppcheck`, `trufflehog` | `brew install …` or `apt install …` |
-| Manual | `spotbugs`, `phpstan` | see project release pages |
-
-If you're running yobitsugi via an AI assistant (`/yobitsugi .`), the assistant will see the "scanner skipped" entries in `scan_report.json` and **ask you** whether to run the appropriate install commands.
+Every finding has a stable `id` (a hash of `tool` + `file` + `line` + `rule_id`) so a re-scan computes a clean fixed / still-present / newly-introduced diff against the previous one.
 
 ---
 
 ## Ephemeral tools mode
 
-Both `yobitsugi run` and `yobitsugi scan` accept `--ephemeral-tools`. With that flag:
+`--ephemeral-tools` is the recommended path for slash-command invocations and CI jobs. With that flag, `yobitsugi scan`:
 
-1. yobitsugi creates a fresh temp directory (under the OS temp root) and redirects its managed venv there for the duration of the command.
-2. It detects the repo's languages **before** writing anything to the workspace and installs only the pip scanners the repo actually needs — semgrep won't be pulled in for a Bash-only repo, bandit won't be pulled in for a Go-only repo.
-3. The full pipeline (or scan-only) runs against the throwaway venv. `PATH` is prepended automatically so the temp scanners shadow anything on the system.
-4. When the command exits — successfully, with an error, or via Ctrl-C — the temp directory is deleted in a `finally` block. Your home dir's `~/.yobitsugi/tools/` is never touched.
-
-This is the recommended path for slash-command invocations (`/yobitsugi .` inside any assistant), one-off audits, and CI jobs that don't want to leave state behind. The persistent `yobitsugi install-scanners` flow is still the right choice for developer workstations where you'd rather pay the install cost once.
+1. Creates a fresh temp directory and redirects its managed scanner venv there for the duration of the command.
+2. Detects the repo's languages and installs **only the pip scanners the repo actually needs** — semgrep won't be pulled into a Bash-only repo, bandit won't be pulled into a Go-only repo.
+3. Runs the scan against the throwaway venv (`PATH` is auto-prepended).
+4. Deletes the temp directory in a `finally` block. Your `~/.yobitsugi/tools/` is never touched.
 
 ```bash
-yobitsugi scan ./services/api --ephemeral-tools     # one-shot scan, no leftover venv
-yobitsugi run ./services/api --ephemeral-tools      # full pipeline, cleaned up at the end
+yobitsugi scan ./services/api --ephemeral-tools
 ```
 
-Under the hood:
-
-| Piece | Where | What it does |
-| --- | --- | --- |
-| `--ephemeral-tools` flag | `yobitsugi run`, `yobitsugi scan` | Opt in to the ephemeral venv path for a single invocation. |
-| `tools.ephemeral_tools_dir()` | [`yobitsugi/core/tools.py`](yobitsugi/core/tools.py) | Context manager that swaps `TOOLS_DIR` / `VENV_DIR` / `MANIFEST_PATH` to a fresh `tempfile.mkdtemp()` and `shutil.rmtree`s it on exit. |
-| `tools.install_missing_pip_scanners(registry, languages=...)` | [`yobitsugi/core/tools.py`](yobitsugi/core/tools.py) | Programmatic equivalent of `install-scanners`, scoped to the languages the repo actually has. |
-| `_with_optional_ephemeral_tools()` | [`yobitsugi/cli.py`](yobitsugi/cli.py) | Wraps the body of `cmd_run` / `cmd_scan`: detect languages → install only the pip scanners the repo needs → run pipeline → tear down temp venv on the way out. |
-| `_quick_detect_languages()` | [`yobitsugi/cli.py`](yobitsugi/cli.py) | Calls `detect.detect()` directly so the pre-install language sniff doesn't touch the real workspace before the pipeline does. |
-
----
-
-## Configure the LLM provider
-
-Provider config is resolved in this order: `--provider` flag → environment variables → `~/.yobitsugi/config.yaml` → autodetect from any API key in env.
-
-| Provider | Env var | Example model |
-| --- | --- | --- |
-| OpenAI | `OPENAI_API_KEY` | `gpt-4o`, `gpt-4o-mini` |
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-4-7`, `claude-sonnet-4-6` |
-| Google | `GOOGLE_API_KEY` | `gemini-1.5-pro` |
-| Ollama (local) | none | `llama3.1:70b` |
-| OpenAI-compatible (Groq, Together, Fireworks, vLLM, LM Studio, OpenRouter) | `OPENAI_API_KEY` + `OPENAI_BASE_URL` | any |
-
-```bash
-yobitsugi config --init        # write a starter ~/.yobitsugi/config.yaml
-yobitsugi config               # show resolved provider/model/base_url
-```
+If you'd rather pay the install cost once and keep scanners around, use `yobitsugi install-scanners` instead — that installs the Python scanners into a persistent venv at `~/.yobitsugi/tools/venv/`.
 
 ---
 
 ## Common commands
 
-```
-/yobitsugi .                                     # full pipeline, prompt before each fix
-/yobitsugi . --auto                              # apply fixes without confirmation
-/yobitsugi . --severity CRITICAL                 # only critical findings
-/yobitsugi . --provider anthropic --model claude-opus-4-7
-/yobitsugi . --skip-tests                        # don't generate regression tests
-/yobitsugi . --allow-dirty                       # run on a dirty git tree
-/yobitsugi . --ephemeral-tools                   # install scanners into a temp venv, delete it after the run
+```bash
+/yobitsugi .                                     # inside any supported assistant — the skill drives everything
+/yobitsugi . --severity CRITICAL                 # filter the fix loop the assistant will run
+/yobitsugi . --auto                              # skip per-fix confirmation (assistant still shows each diff)
 
-yobitsugi scan ./services/api                    # scan-only, no fixes, no LLM
-yobitsugi scan ./services/api --ephemeral-tools  # scan in a throwaway venv that's deleted on exit
+# Standalone binary usage (CI, headless audits, scripting):
+yobitsugi scan ./services/api                    # scan, write findings.json
+yobitsugi scan ./services/api --ephemeral-tools  # …with throwaway scanner venv
 yobitsugi findings ~/.yobitsugi/<workspace>      # pretty-print existing findings
-yobitsugi findings <ws> --severity HIGH --json   # JSON output for piping
-yobitsugi rollback ~/.yobitsugi/<workspace>      # restore all .yobitsugi.bak files
+yobitsugi findings <ws> --severity HIGH --json   # JSON for piping
+yobitsugi summary <ws> --format markdown         # the same markdown tables the assistant sees
+yobitsugi summary <ws> --format json             # structured data for tooling
+
+yobitsugi install                                # register skill files in every detected AI editor
+yobitsugi install --platform claude              # only Claude Code
+yobitsugi uninstall                              # remove from all platforms in one shot
 
 yobitsugi list-platforms                         # show all supported assistants
-yobitsugi detect-platforms                       # show only the ones installed
+yobitsugi detect-platforms                       # only the ones installed on this machine
 
 yobitsugi list-scanners                          # every scanner + install status
-yobitsugi install-scanners                       # install missing Python scanners into ~/.yobitsugi/tools/venv/
+yobitsugi install-scanners                       # persistent install of pip scanners into ~/.yobitsugi/tools/venv/
 yobitsugi install-scanners --all                 # force reinstall/upgrade all of them
 yobitsugi uninstall-scanners                     # wipe the managed venv
-
-yobitsugi summary ~/.yobitsugi/<workspace>       # tabular post-run report (runs automatically at the end of `run`/`scan`)
-yobitsugi summary <ws> --format markdown          # markdown tables — paste into chat
-yobitsugi summary <ws> --format json              # structured data for tooling
 ```
+
+There is no `yobitsugi run`, no `yobitsugi fix`, no `yobitsugi apply`, no `yobitsugi rollback`, no `yobitsugi config`. Those used to be CLI subcommands; they're now the host AI assistant's job, driven by the installed skill.
 
 ---
 
-## Architecture overview
+## Skipping files
 
-```
-detect → scan → parse → (loop: fix → apply) → tests → validate
-```
+Most scanners walk the tree themselves, and yobitsugi excludes the common environment and build dirs by default (`.venv`, `venv`, `node_modules`, `.tox`, `build`, `dist`, `site-packages`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `target`, `vendor`, `third_party`, …) for `bandit` and `semgrep`.
 
-Every stage is also a callable Python function and a standalone CLI entrypoint. The orchestrator at [`yobitsugi/core/pipeline.py`](yobitsugi/core/pipeline.py) runs them **in-process** — no subprocess fork between stages. Each stage reads and writes JSON inside the workspace directory, so you can re-run any stage by hand against the previous stage's output.
+For per-project overrides, drop the scanner's own ignore file:
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full module map and design notes.
+- **bandit** — `.bandit` or `bandit.yaml` in the repo root
+- **semgrep** — `.semgrepignore`
+- **eslint** — `.eslintignore`
+- **trufflehog** — respects `.gitignore` automatically (Go binary)
+
+If you need to add a directory to yobitsugi's defaults, edit the `command:` line in [`yobitsugi/data/scanners.yaml`](yobitsugi/data/scanners.yaml).
 
 ---
 
-## Safety guarantees
+## Team setup
 
-- Refuses to run on a dirty git tree unless `--allow-dirty` is set.
-- Every modified file gets a `.yobitsugi.bak` sibling before the patch is applied.
-- An `applied.json` rollback log records every patch — `yobitsugi rollback` restores all of them in one command.
-- The model is constrained to return unified diffs or the literal string `# CANNOT_FIX: <reason>`. No inline edits, no destructive commands.
-- Code snippets pulled from your repo are wrapped in `[BEGIN UNTRUSTED USER CODE]` / `[END UNTRUSTED USER CODE]` markers in the LLM prompt to mitigate prompt-injection from malicious comments or strings.
-- Fixes are never auto-applied unless you explicitly pass `--auto`.
-- `validate` re-runs the full scan after fixes and flags `newly_introduced` findings — vulnerabilities the patches accidentally created. Exit code 3 if any.
+The workspace dir at `~/.yobitsugi/<repo>-<ts>/` is local to your run — don't commit it. The audit trail is your chat transcript.
+
+Recommended flow:
+
+1. One developer (or CI) runs `/yobitsugi .` and triages the findings their assistant proposes.
+2. They commit only the source changes the assistant applied (no workspace dir).
+3. CI runs `yobitsugi scan . --ephemeral-tools` on every PR and fails the build if new CRITICAL/HIGH findings appear (use `yobitsugi findings <ws> --severity CRITICAL HIGH --json` to assert in your pipeline).
+4. When a scanner is missing (`status: "skipped_missing_tool"` in `scan_report.json`), the assistant offers to install it. For CI, install the non-pip ones (`shellcheck`, `trufflehog`, `gosec`, etc.) in the build image and let `--ephemeral-tools` handle the pip ones.
+
+---
+
+## Privacy
+
+- **Scanner output** stays on your machine. The `yobitsugi` binary never makes a network call.
+- **Fix generation** happens in your AI editor — your model, your API key, your billing. Yobitsugi has no LLM client of its own.
+- **Untrusted code snippets** in `findings.json`'s `code_snippet` field are marked as data in the skill prompt to mitigate prompt injection from malicious comments or string literals in scanned files.
+- No telemetry, no usage tracking, no analytics.
+
+---
+
+## Full command reference
+
+```
+yobitsugi scan <path>                            # detect → run scanners → parse to findings.json
+yobitsugi scan <path> --ephemeral-tools          # …in a throwaway venv that's deleted on exit
+yobitsugi scan <path> --out <workspace>          # write to a specific dir instead of ~/.yobitsugi/<name>-<ts>/
+
+yobitsugi findings <workspace>                   # pretty-print
+yobitsugi findings <workspace> --severity HIGH CRITICAL
+yobitsugi findings <workspace> --type SQL_INJECTION XSS
+yobitsugi findings <workspace> --json            # raw JSON for piping
+
+yobitsugi summary <workspace>                    # rich tables (default)
+yobitsugi summary <workspace> --format markdown  # what the assistant pastes into chat
+yobitsugi summary <workspace> --format json      # structured data
+
+yobitsugi install                                # register skill in every detected editor
+yobitsugi install --platform <name>              # one specific editor
+yobitsugi install --scope project                # write into ./.<editor>/ instead of ~/.<editor>/
+yobitsugi uninstall [--platform <name>] [--scope ...]
+yobitsugi list-platforms
+yobitsugi detect-platforms
+
+yobitsugi list-scanners
+yobitsugi install-scanners                       # missing pip scanners → ~/.yobitsugi/tools/venv/
+yobitsugi install-scanners --all                 # force reinstall/upgrade
+yobitsugi uninstall-scanners                     # wipe ~/.yobitsugi/tools/
+
+yobitsugi version
+```
 
 ---
 
 ## The unified Finding schema
 
-Every scanner's output is normalised to this shape so the LLM, the apply logic, and the test generator all see the same thing:
+Every scanner's output is normalised to this shape so the host assistant sees the same thing regardless of which tool found the bug:
 
 ```json
 {
@@ -367,194 +269,35 @@ Every scanner's output is normalised to this shape so the LLM, the apply logic, 
 }
 ```
 
-`type` is one of: `SQL_INJECTION`, `XSS`, `HARDCODED_SECRET`, `COMMAND_INJECTION`, `PATH_TRAVERSAL`, `WEAK_CRYPTO`, `INSECURE_DESERIALIZATION`, `SSRF`, `OPEN_REDIRECT`, `VULNERABLE_DEPENDENCY`, or `OTHER`. Auto-classified by the parser when the scanner doesn't say it explicitly.
-
-The `id` is a stable hash of `(tool, file, line, rule_id)` — so the same finding gets the same id across runs, which is how `validate` computes `fixed_ids` and `still_present`.
+`type` is one of: `SQL_INJECTION`, `XSS`, `HARDCODED_SECRET`, `COMMAND_INJECTION`, `PATH_TRAVERSAL`, `WEAK_CRYPTO`, `INSECURE_DESERIALIZATION`, `SSRF`, `OPEN_REDIRECT`, `VULNERABLE_DEPENDENCY`, `OTHER`.
 
 ---
 
-## Privacy
+## Learn more
 
-- **Scanner output** stays on your machine. None of it is sent to the LLM unless a fix is being generated.
-- **Fix generation** sends one finding's metadata plus ±12 lines of source context to the LLM, using your own API key.
-- **No telemetry**, no usage tracking, no analytics.
-
----
-
-## Development
-
-```bash
-git clone https://github.com/FiNiX-GaMmA/yobitsugi
-cd yobitsugi
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-
-# Verify the toolchain.
-yobitsugi version
-ruff check yobitsugi
-mypy yobitsugi
-pytest
-```
+- [SKILL.md](yobitsugi/data/SKILL.md) — the runbook the host AI assistant follows when you type `/yobitsugi`
+- [ARCHITECTURE.md](ARCHITECTURE.md) — the two halves (CLI vs skill), module map, design notes
+- [CHANGELOG.md](CHANGELOG.md) — what's new, what was removed
 
 ---
 
-## Testing
+<details>
+<summary>Contributing</summary>
 
-The test suite is built around **pytest** and is designed to run hermetically — no real LLM calls, no real scanner binaries, no real network. External dependencies are mocked at well-defined seams (`subprocess.run`, `requests.post`, `Path.home()`).
-
-### Running the tests
-
-```bash
-pip install -e ".[dev]"
-
-pytest                              # run everything
-pytest -v                           # verbose
-pytest tests/test_parse.py          # one file
-pytest tests/test_parse.py -k bandit  # one matching test
-pytest --tb=short                   # shorter tracebacks
-pytest -x                           # stop at first failure
-```
-
-### What's covered
-
-| Suite | Module under test | What it asserts |
-| --- | --- | --- |
-| `tests/test_detect.py` | `yobitsugi.core.detect` | Language counting, directory pruning, large-file skip, symlink handling, CLI output. |
-| `tests/test_parse.py` | `yobitsugi.core.parse` | Severity normalisation, vuln-type classification, stable `make_id`, the unified `finding()` constructor, bandit/semgrep/safety parsers, deduplication, malformed-input handling. |
-| `tests/test_apply.py` | `yobitsugi.core.apply` | The `CANNOT_FIX` sentinel, diff file extraction, dirty-tree refusal, backup creation, `applied.json` logging, full rollback round-trip, failure modes. |
-| `tests/test_llm.py` | `yobitsugi.core.llm` | Provider resolution precedence (kwargs → env → file → autodetect), missing-key errors, request-shape correctness for OpenAI/Anthropic, error propagation for non-OK / non-JSON responses. |
-| `tests/test_pipeline.py` | `yobitsugi.core.pipeline` | Stage ordering, severity filtering, `--skip-tests`, per-finding LLM-error resilience, empty-diff handling, CLI → `run_pipeline` plumbing. |
-| `tests/test_cli.py` | `yobitsugi.cli` | Every subcommand: `version`, `list-platforms`, `detect-platforms`, `config`, `findings`, `run`, positional shortcut, help fallthrough. |
-| `tests/test_installers.py` | `yobitsugi.installers.*` | Registry completeness, `get_installer` lookup, `InstallResult.__str__`, install→uninstall round-trip for every supported assistant. |
-
-The test suite runs in **~2 seconds** locally and against Python 3.11 / 3.12 / 3.13 in CI on every push and pull request.
-
-### Test layout
-
-```
-tests/
-├── conftest.py            # shared fixtures: tmp_repo, tmp_workspace, fake_home, sample_finding, ...
-├── test_detect.py
-├── test_parse.py
-├── test_apply.py
-├── test_llm.py
-├── test_pipeline.py
-├── test_cli.py
-└── test_installers.py
-```
-
-Configuration lives in [`pyproject.toml`](pyproject.toml) under `[tool.pytest.ini_options]`. Linting + type checking are configured under `[tool.ruff]` and `[tool.mypy]`.
-
-### Writing new tests
-
-- Put pure, parameterised assertions on the smallest unit you can.
-- For anything that would call subprocess, network, or the filesystem outside a `tmp_path`, use the existing fixtures or `monkeypatch`.
-- New scanner parser? Add a fixture of sample raw input + assert against the unified Finding shape (see `TestBanditParser` / `TestSemgrepParser` for the pattern).
-- New LLM provider? Add an analogue of `test_chat_openai_request_shape` that asserts the request URL, headers, and body shape.
-
----
-
-## Releasing
-
-> **Release policy: every push to `main` is a release.** The workflow finds the latest `vX.Y.Z` tag, bumps the patch component, creates the new tag, builds, and publishes to both GitHub Releases and PyPI. There is no separate "version bump" step — version metadata lives in git tags, not in source files.
-
-This is wired through [`hatch-vcs`](https://github.com/ofek/hatch-vcs): at build time, the package's version is read from the latest git tag. `pyproject.toml` declares `dynamic = ["version"]` rather than a static value; `yobitsugi/__init__.py` reads `__version__` from a generated `yobitsugi/_version.py` (the file is gitignored — hatch-vcs writes it during `pip install` / `python -m build`).
-
-### Day-to-day flow
-
-```bash
-git commit -m "Fix the thing"
-git push origin main
-```
-
-That's the whole release procedure. The workflow takes over:
-
-1. **prep** — finds the latest `vX.Y.Z` tag (e.g. `v0.1.4`), computes the next patch (`v0.1.5`).
-2. **tag** — creates and pushes `v0.1.5`.
-3. **build** — checks out at `v0.1.5`, builds an sdist + wheel; hatch-vcs stamps the artifacts as `0.1.5`. Validates with `twine check --strict`.
-4. **release** — creates a GitHub Release at `/releases` with the wheel + sdist attached and notes pulled from the matching `## 0.1.5` section of [CHANGELOG.md](CHANGELOG.md) (falls back to auto-generated notes from commits).
-5. **publish** — uploads to https://pypi.org/project/yobitsugi/ through the gated `pypi` environment.
-
-### Workflow jobs
-
-| Job | When it runs | What it does |
-| --- | --- | --- |
-| `prep` | Always | Computes the next tag (latest `vX.Y.Z` + 1 patch). |
-| `tag` | Always (skipped only when a `v*` tag was pushed directly) | Creates and pushes the new tag. |
-| `build` | After `tag` succeeds | sdist + wheel via `hatch-vcs`, validated with `twine check --strict`. |
-| `release` | After `build` (skipped on `release: published` events) | Creates the GitHub Release with notes + assets. Tags containing `-rc`, `-alpha`, or `-beta` are marked as pre-releases. |
-| `publish` | After `build` | Uploads to PyPI through the `pypi` environment. |
-
-### Bumping minor or major
-
-The workflow only auto-bumps the patch component. To cut a minor or major release, push the tag manually:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The `tag` job is skipped (tag already exists), `prep` picks up that exact tag, everything else runs.
-
-### Trade-offs of this model
-
-- **Every push burns a PyPI version number.** Even a typo fix in the README publishes a new release. PyPI versions are immutable.
-- **Version numbers have no semantic meaning.** `0.1.47` just means "the 47th push since `v0.1.0`," not "47 patch-level fixes."
-- **Every push costs ~2 minutes of CI.**
-- **Upside:** zero release ceremony. Push and you've shipped.
-
-If those trade-offs stop making sense, switch the `prep` job back to "release only when pyproject.toml's version is new" — the prior model. The relevant section is roughly 15 lines.
-
-### Required secrets
-
-| Secret | Required? | Value |
-| --- | --- | --- |
-| `PYPI_TOKEN` | **Yes** | A PyPI API token starting with `pypi-` (create one at https://pypi.org/manage/account/token/) |
-| `RELEASE_PAT` | Optional | A fine-grained Personal Access Token with `contents: write` on this repo. Only useful if you want the auto-pushed tag to *also* trigger any **other** workflows that watch tags. The release flow itself works without it. |
-
-The workflow passes `__token__` as the PyPI username, per PyPI's API-token convention — so you only need to manage one secret.
-
-> **Note** — PyPI no longer accepts raw account passwords for uploads. `PYPI_TOKEN` **must** be an API token (the value starts with `pypi-`), not your account password.
-
-Cut a release:
-
-```bash
-# Bump the version in pyproject.toml + yobitsugi/__init__.py, commit, then:
-git tag v0.1.0
-git push origin v0.1.0
-```
-
----
-
-## Semantic versioning
-
-`yobitsugi` follows [SemVer 2.0.0](https://semver.org/). The current major (`0.x`) is the pre-stable line — minor versions may include breaking API changes. From `1.0.0` onwards, breaking changes will only land in major versions.
-
----
-
-## Python version lifecycle
-
-| Python | Status |
-| --- | --- |
-| 3.11 | **Supported** (oldest supported) |
-| 3.12 | **Supported** |
-| 3.13 | **Supported** |
-| ≤ 3.10 | Unsupported — `pip install` will refuse to install. |
-
-When a Python version reaches end-of-life upstream, support is dropped in the next minor release of `yobitsugi`.
-
----
-
-## Contributing
-
-Issues, PRs, and new scanner/installer/provider plug-ins are welcome.
+Issues, PRs, and new scanner/installer plug-ins are welcome.
 
 1. Fork the repo + create a branch.
 2. `pip install -e ".[dev]"`.
 3. Run `ruff check yobitsugi`, `mypy yobitsugi`, and `pytest` before pushing.
-4. Open a PR against `main`. CI will run lint + type-check + tests on Python 3.11 / 3.12 / 3.13.
+4. Open a PR against `main`. CI runs lint + type-check + tests on Python 3.11 / 3.12 / 3.13.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for where to add new scanners, installers, or LLM providers — most additions are config-only.
+**Adding a scanner** — one YAML block in [`yobitsugi/data/scanners.yaml`](yobitsugi/data/scanners.yaml). If the output format is exotic, add a parser to [`yobitsugi/core/parse.py`](yobitsugi/core/parse.py) — see [`yobitsugi/data/parser_recipes.md`](yobitsugi/data/parser_recipes.md) for the contract.
+
+**Adding an AI assistant** — one subclass of `Installer` in `yobitsugi/installers/<name>.py`. See `installers/claude.py` for the simplest case and `installers/cursor.py` / `installers/codex.py` for editors that need their own frontmatter format.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for module responsibilities and design notes.
+
+</details>
 
 ---
 
