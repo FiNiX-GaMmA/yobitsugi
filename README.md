@@ -386,43 +386,54 @@ Configuration lives in [`pyproject.toml`](pyproject.toml) under `[tool.pytest.in
 
 ## Releasing
 
-Both **GitHub Release creation** and **PyPI publishing** are automated by [`.github/workflows/publish.yml`](.github/workflows/publish.yml). It triggers on:
+**Auto-tagging, GitHub Release creation, and PyPI publishing are all automated** by [`.github/workflows/publish.yml`](.github/workflows/publish.yml). The day-to-day flow is:
 
-- a `v*` git tag push (recommended — runs everything below), **or**
-- a GitHub Release being published manually (skips re-creating the release, just publishes to PyPI), **or**
-- a manual `workflow_dispatch` (build only).
+1. Bump `version` in [`pyproject.toml`](pyproject.toml) **and** `__version__` in [`yobitsugi/__init__.py`](yobitsugi/__init__.py) to the new version.
+2. Move the items under `## Unreleased` in [CHANGELOG.md](CHANGELOG.md) into a new `## <version>` section.
+3. Commit and push to `main`.
 
-The workflow has three jobs:
+   ```bash
+   git commit -am "Release 0.1.1"
+   git push origin main
+   ```
 
-| Job | What it does | Authenticated by |
+That's it. The workflow takes over from here:
+
+- Notices the new version in `pyproject.toml`.
+- Verifies `yobitsugi/__init__.py` matches.
+- Creates and pushes a `v<version>` git tag.
+- Builds an sdist + wheel from that tagged commit, validates with `twine check --strict`.
+- Creates a GitHub Release at `/releases` with the wheel + sdist attached and notes pulled from the matching `## <version>` section of CHANGELOG.md (falls back to auto-generated notes from commits).
+- Uploads the same artifacts to https://pypi.org/project/yobitsugi/ through the gated `pypi` environment.
+
+### Workflow jobs
+
+| Job | When it runs | What it does |
 | --- | --- | --- |
-| `build` | Builds sdist + wheel with `python -m build`, validates with `twine check --strict`, uploads as a workflow artifact. | — |
-| `release` | On a `v*` tag push: creates a GitHub Release with the tag name, extracts release notes from the matching `## <version>` section of [CHANGELOG.md](CHANGELOG.md) (falls back to auto-generated notes from commits), and attaches the sdist + wheel as release assets. Marks the release as a pre-release if the tag contains `-rc`, `-alpha`, or `-beta`. | The default `GITHUB_TOKEN` |
-| `publish` | Downloads the build artifacts and uploads them to PyPI through the gated `pypi` environment. | `PYPI_TOKEN` secret |
+| `prep` | Always | Decides whether this push should release anything. Reads the version from `pyproject.toml`, compares against existing tags. |
+| `tag` | Only when `pyproject.toml`'s version has no matching tag yet | Verifies `yobitsugi/__init__.py` agrees, then creates and pushes `v<version>`. |
+| `build` | Whenever `prep` says to release | sdist + wheel + `twine check --strict`. |
+| `release` | Whenever `prep` says to release (skipped if a GitHub Release already triggered the run) | Creates the GitHub Release with notes + assets. `-rc` / `-alpha` / `-beta` tags are marked as pre-releases. |
+| `publish` | Whenever `prep` says to release | Uploads to PyPI through the `pypi` environment. |
 
-| Secret | Value |
-| --- | --- |
-| `PYPI_TOKEN` | a PyPI API token starting with `pypi-` (create one at https://pypi.org/manage/account/token/) |
+### Alternative triggers
+
+You can still cut a release manually if you prefer:
+
+- **Tag push**: `git tag v0.1.1 && git push origin v0.1.1`. The `tag` job is skipped (tag already exists); everything else runs.
+- **GitHub UI release**: publish a release via the web UI. `tag` and `release` jobs are skipped; `publish` runs to push to PyPI.
+- **`workflow_dispatch`**: trigger it from the Actions tab. Uses the version currently in `pyproject.toml`.
+
+### Required secrets
+
+| Secret | Required? | Value |
+| --- | --- | --- |
+| `PYPI_TOKEN` | **Yes** | A PyPI API token starting with `pypi-` (create one at https://pypi.org/manage/account/token/) |
+| `RELEASE_PAT` | Optional | A fine-grained Personal Access Token with `contents: write` on this repo. Only useful if you want the auto-pushed tag to *also* trigger any **other** workflows that watch tags. The release flow itself works without it. |
 
 The workflow passes `__token__` as the PyPI username, per PyPI's API-token convention — so you only need to manage one secret.
 
 > **Note** — PyPI no longer accepts raw account passwords for uploads. `PYPI_TOKEN` **must** be an API token (the value starts with `pypi-`), not your account password.
-
-### Cutting a release
-
-1. Bump `version` in [`pyproject.toml`](pyproject.toml) and `__version__` in [`yobitsugi/__init__.py`](yobitsugi/__init__.py).
-2. Move the items from `## Unreleased` in [CHANGELOG.md](CHANGELOG.md) into a new `## <version>` section.
-3. Commit. Tag. Push.
-
-   ```bash
-   git commit -am "Release v0.1.0"
-   git tag v0.1.0
-   git push origin main v0.1.0
-   ```
-
-4. The workflow runs. When it finishes you'll have:
-   - A new entry at https://github.com/FiNiX-GaMmA/yobitsugi/releases with the wheel + sdist attached.
-   - A new version at https://pypi.org/project/yobitsugi/.
 
 Cut a release:
 
