@@ -19,7 +19,6 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-
 # Extension → language. We err on the side of broad coverage so scanners get a chance
 # to run; if a language has no scanner registered, run_scanners.py just skips it.
 EXTENSIONS: dict[str, str] = {

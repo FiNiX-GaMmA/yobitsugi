@@ -84,7 +84,7 @@ def build_user_prompt(f: dict, root: Path) -> str:
     file_context = read_file_context(root, f.get("file") or "", f.get("line"))
 
     parts = [
-        f"# Vulnerability Finding",
+        "# Vulnerability Finding",
         f"- tool: {f.get('tool')}",
         f"- type: {f.get('type')}",
         f"- severity: {f.get('severity')}",

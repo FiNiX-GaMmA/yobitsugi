@@ -386,21 +386,43 @@ Configuration lives in [`pyproject.toml`](pyproject.toml) under `[tool.pytest.in
 
 ## Releasing
 
-Publishing to PyPI is fully automated by [`.github/workflows/publish.yml`](.github/workflows/publish.yml). It triggers on:
+Both **GitHub Release creation** and **PyPI publishing** are automated by [`.github/workflows/publish.yml`](.github/workflows/publish.yml). It triggers on:
 
-- a `v*` git tag push, **or**
-- a GitHub Release, **or**
-- a manual `workflow_dispatch`.
+- a `v*` git tag push (recommended — runs everything below), **or**
+- a GitHub Release being published manually (skips re-creating the release, just publishes to PyPI), **or**
+- a manual `workflow_dispatch` (build only).
 
-The workflow builds an sdist + a wheel with `python -m build`, validates them with `twine check --strict`, and uploads them to PyPI authenticated by a single repository secret:
+The workflow has three jobs:
+
+| Job | What it does | Authenticated by |
+| --- | --- | --- |
+| `build` | Builds sdist + wheel with `python -m build`, validates with `twine check --strict`, uploads as a workflow artifact. | — |
+| `release` | On a `v*` tag push: creates a GitHub Release with the tag name, extracts release notes from the matching `## <version>` section of [CHANGELOG.md](CHANGELOG.md) (falls back to auto-generated notes from commits), and attaches the sdist + wheel as release assets. Marks the release as a pre-release if the tag contains `-rc`, `-alpha`, or `-beta`. | The default `GITHUB_TOKEN` |
+| `publish` | Downloads the build artifacts and uploads them to PyPI through the gated `pypi` environment. | `PYPI_TOKEN` secret |
 
 | Secret | Value |
 | --- | --- |
 | `PYPI_TOKEN` | a PyPI API token starting with `pypi-` (create one at https://pypi.org/manage/account/token/) |
 
-The workflow itself passes `__token__` as the PyPI username, per PyPI's API-token convention — so you only need to manage one secret.
+The workflow passes `__token__` as the PyPI username, per PyPI's API-token convention — so you only need to manage one secret.
 
 > **Note** — PyPI no longer accepts raw account passwords for uploads. `PYPI_TOKEN` **must** be an API token (the value starts with `pypi-`), not your account password.
+
+### Cutting a release
+
+1. Bump `version` in [`pyproject.toml`](pyproject.toml) and `__version__` in [`yobitsugi/__init__.py`](yobitsugi/__init__.py).
+2. Move the items from `## Unreleased` in [CHANGELOG.md](CHANGELOG.md) into a new `## <version>` section.
+3. Commit. Tag. Push.
+
+   ```bash
+   git commit -am "Release v0.1.0"
+   git tag v0.1.0
+   git push origin main v0.1.0
+   ```
+
+4. The workflow runs. When it finishes you'll have:
+   - A new entry at https://github.com/FiNiX-GaMmA/yobitsugi/releases with the wheel + sdist attached.
+   - A new version at https://pypi.org/project/yobitsugi/.
 
 Cut a release:
 

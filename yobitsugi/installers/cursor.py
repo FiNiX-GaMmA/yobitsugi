@@ -10,7 +10,6 @@ from pathlib import Path
 from yobitsugi.installers.base import Installer, InstallResult, register
 from yobitsugi.installers.utils import load_template
 
-
 CURSOR_FRONTMATTER = """---
 description: Scan repository for security vulnerabilities and generate LLM-driven fixes
 globs: ["**/*"]

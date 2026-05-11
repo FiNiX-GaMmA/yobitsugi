@@ -13,7 +13,6 @@ the rest of the codebase doesn't have to know about them.
 """
 from __future__ import annotations
 
-import os
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -106,10 +105,12 @@ def get_installer(name: str) -> Installer:
 
 # Trigger concrete-installer registration. Imports are at the bottom to avoid
 # circular-import headaches: each concrete file does `from .base import Installer, register`.
-from yobitsugi.installers import claude  # noqa: F401, E402
-from yobitsugi.installers import codex  # noqa: F401, E402
-from yobitsugi.installers import cursor  # noqa: F401, E402
-from yobitsugi.installers import gemini  # noqa: F401, E402
-from yobitsugi.installers import aider  # noqa: F401, E402
-from yobitsugi.installers import opencode  # noqa: F401, E402
-from yobitsugi.installers import copilot  # noqa: F401, E402
+from yobitsugi.installers import (  # noqa: E402, F401
+    aider,
+    claude,
+    codex,
+    copilot,
+    cursor,
+    gemini,
+    opencode,
+)

@@ -80,7 +80,7 @@ def build_prompt(finding: dict, applied_entry: dict | None) -> str:
     if applied_entry:
         parts += [
             "",
-            f"## Files changed by the fix",
+            "## Files changed by the fix",
             ", ".join(applied_entry.get("files") or []),
         ]
     if tpl:

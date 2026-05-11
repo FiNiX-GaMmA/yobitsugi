@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Release & Publish
 
 on:
   push:
@@ -9,11 +9,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 1. Build sdist + wheel. Shared by both downstream jobs.
   build:
     name: Build sdist + wheel
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so auto-generated release notes can diff against the previous tag
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,6 +42,63 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # 2. Create a GitHub Release on tag push, with the built sdist + wheel attached.
+  #    Skipped on the `release: published` event (no point recreating an existing release).
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Extract version from tag
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        run: |
+          version="${{ steps.tag.outputs.version }}"
+          # Pull the section between "## <version>" and the next "## " heading.
+          # Falls back to a placeholder if no matching section exists.
+          if grep -q "^## ${version}" CHANGELOG.md; then
+            awk -v v="^## ${version}" '
+              $0 ~ v {flag=1; next}
+              flag && /^## / {exit}
+              flag {print}
+            ' CHANGELOG.md > release_notes.md
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No matching CHANGELOG section for ${version} — using auto-generated notes." > release_notes.md
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          generate_release_notes: ${{ steps.changelog.outputs.found != 'true' }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          fail_on_unmatched_files: true
+
+  # 3. Publish the same artifacts to PyPI. Gated behind the `pypi` environment.
   publish:
     name: Publish to PyPI
     needs: build

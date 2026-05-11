@@ -16,7 +16,6 @@ from pathlib import Path
 
 from yobitsugi.installers.base import Installer, InstallResult, register
 
-
 PKG_ROOT = Path(__file__).resolve().parent.parent
 BUNDLED_SKILL = PKG_ROOT / "data" / "SKILL.md"
 
@@ -30,10 +29,7 @@ class ClaudeCodeInstaller(Installer):
         return Path.home() / ".claude"
 
     def _target(self, scope: str) -> Path:
-        if scope == "project":
-            base = Path.cwd() / ".claude"
-        else:
-            base = self.config_dir()
+        base = Path.cwd() / ".claude" if scope == "project" else self.config_dir()
         return base / "skills" / "yobitsugi" / "SKILL.md"
 
     def install(self, scope: str = "user") -> InstallResult:

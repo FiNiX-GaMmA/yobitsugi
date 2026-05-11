@@ -353,7 +353,7 @@ class LLMClient:
         self._builder, self._extractor = _BUILDERS[spec.request_builder]
 
     @classmethod
-    def from_env(cls, **overrides) -> "LLMClient":
+    def from_env(cls, **overrides) -> LLMClient:
         return cls(resolve_config(**overrides))
 
     def chat(self, system: str, user: str) -> str:

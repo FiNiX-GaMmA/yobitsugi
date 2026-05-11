@@ -17,7 +17,10 @@
 ### Added
 - **Unit test suite** (`tests/`) — 147 hermetic pytest tests covering `detect`, `parse`, `apply`, `llm`, `pipeline`, `cli`, and all platform installers. Runs in ~2 seconds. Tested against Python 3.11, 3.12, 3.13.
 - **GitHub Actions CI** (`.github/workflows/ci.yml`) — runs ruff, mypy, and pytest on every push and PR across Python 3.11 / 3.12 / 3.13.
-- **GitHub Actions PyPI publishing** (`.github/workflows/publish.yml`) — triggered by `v*` tags, GitHub Releases, or manual dispatch. Authenticated by a single `PYPI_TOKEN` repository secret (the workflow passes `__token__` as the username, per PyPI's API-token convention).
+- **GitHub Actions release + publish workflow** (`.github/workflows/publish.yml`) — triggered by `v*` tags, GitHub Releases, or manual dispatch. Three jobs:
+  - **build** — produces sdist + wheel, validates with `twine check --strict`.
+  - **release** — on a `v*` tag, creates a GitHub Release at https://github.com/FiNiX-GaMmA/yobitsugi/releases with notes extracted from the matching `## <version>` section of `CHANGELOG.md` (or auto-generated from commit history as a fallback), and attaches the wheel + sdist as release assets. Tags containing `-rc`, `-alpha`, or `-beta` are marked as pre-releases.
+  - **publish** — uploads the same artifacts to PyPI, gated behind the `pypi` GitHub Environment. Authenticated by a single `PYPI_TOKEN` repository secret (the workflow passes `__token__` as the username, per PyPI's API-token convention).
 - `pyproject.toml` now includes `[tool.pytest.ini_options]`, `[tool.mypy]`, and an expanded `[tool.ruff.lint]` configuration.
 - `Changelog` URL in project metadata.
 - **Comprehensive `.gitignore`** covering Python build/cache artifacts, virtual environments, lint/type/test caches, IDE files, OS metadata, every common secret/credential filename (`.env`, `*.pem`, `*.key`, `*.token`, `credentials.json`, etc.), `yobitsugi` runtime outputs (workspaces, `.yobitsugi.bak` backups, accidental root-level `findings.json`/`applied.json`/`languages.json`/`scan_report.json`/`validation.json`/`raw/`), and documentation builds — with a negation rule (`!yobitsugi/data/*.yaml`) so the shipped scanner registry is never accidentally swallowed.
