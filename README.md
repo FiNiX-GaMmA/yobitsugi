@@ -88,7 +88,7 @@ The temp scanner venv is removed in a `finally` block at the end — on success,
 
 ## What scanners it runs
 
-Auto-detected per language. Missing binaries are skipped, not fatal — most are installed for you automatically in a throwaway venv when you pass `--ephemeral-tools`.
+Auto-detected per language. Missing binaries are skipped, not fatal — most are installed for you automatically when you pass `--ephemeral-tools` (which is what the slash command uses).
 
 | Language | Scanners |
 |----------|----------|
@@ -103,9 +103,66 @@ Auto-detected per language. Missing binaries are skipped, not fatal — most are
 | Shell | `shellcheck`, `semgrep` |
 | Cross-language | `semgrep`, `trufflehog` (secrets) |
 
-Pip-installable scanners (`bandit`, `safety`, `pip-audit`, `semgrep`, `flawfinder`) ship as direct dependencies of the `yobitsugi` wheel and land on `PATH` automatically. Non-Python scanners (eslint, gosec, brakeman, shellcheck, …) need their own runtime — `yobitsugi list-scanners` shows install hints.
+### What ships in the wheel
+
+`pip install yobitsugi` pulls these onto your `PATH` automatically — no extra step:
+
+| Scanner | How it's bundled |
+|---------|------------------|
+| `bandit` | direct dep |
+| `safety` | direct dep (pinned `>=3.0,<3.2` to dodge the `safety` ↔ `typer` ↔ `click 8.2` import crash; `click<8.2` is also pinned alongside) |
+| `pip-audit` | direct dep |
+| `semgrep` | direct dep |
+| `flawfinder` | direct dep |
+| `shellcheck` | direct dep via [`shellcheck-py`](https://github.com/shellcheck-py/shellcheck-py) — the Haskell binary is wrapped in a Python wheel, so `pip` puts a real `shellcheck` executable on `PATH` |
+| `trufflehog` | **fetched on demand** when you pass `--ephemeral-tools`: the Go binary is downloaded from the official GitHub release into the same temp dir as the scanner venv, and is removed at the end of the run. No `brew install` step. See "Trufflehog" below for the persistent variant. |
+
+Non-Python scanners that aren't ours to bundle — `eslint`, `npm audit`, `gosec`, `govulncheck`, `brakeman`, `bundler-audit`, `phpstan`, `cppcheck`, `cargo-audit`, `spotbugs` — need their own runtime (Node / Go / Ruby / etc.). `yobitsugi list-scanners` shows the install hint for each.
 
 Adding a new scanner is one YAML block in [`yobitsugi/data/scanners.yaml`](yobitsugi/data/scanners.yaml) — no code change needed unless the output format is exotic.
+
+### Parallel scanning
+
+`yobitsugi scan` runs scanners on a thread pool so bandit, semgrep, pip-audit, trufflehog, shellcheck etc. all execute concurrently. Each scanner is a subprocess waiting on its own child process — threads are the right shape (no GIL contention) and the wall-clock time is `max(scanner_times)`, not `sum`.
+
+```bash
+yobitsugi scan ./my-project --concurrency 8   # cap at 8 in-flight (default: 6)
+yobitsugi scan ./my-project --sequential       # force one-at-a-time (debugging)
+YOBITSUGI_SCAN_CONCURRENCY=4 yobitsugi scan ./my-project   # env-var equivalent
+```
+
+Output streams as scanners finish:
+
+```
+[scan] concurrency: 6 parallel workers
+  → bandit          dispatched
+  → semgrep         dispatched
+  → pip-audit       dispatched
+  → trufflehog      dispatched
+  ✓ bandit          ok                      0.2s
+  ✓ trufflehog      ok                      3.1s
+  ✓ pip-audit       ok                     25.4s
+  ✓ semgrep         ok                     31.7s
+[scan] all scanners done in 31.7s
+```
+
+### Trufflehog (persistent install)
+
+The ephemeral fetch in `--ephemeral-tools` is enough for one-off runs and CI. If you'd rather have trufflehog stick around between runs (faster startup, works offline), use `bootstrap`:
+
+```bash
+yobitsugi bootstrap                       # auto-picks brew / apt / dnf / yum
+yobitsugi bootstrap --dry-run             # print the install command without running it
+yobitsugi bootstrap trufflehog            # be explicit about what to install
+```
+
+`bootstrap` runs the system package manager that's actually on PATH (in order: `brew`, `apt-get`, `dnf`, `yum`). On platforms without any of those, it prints the install URL.
+
+If trufflehog is already on PATH (either via `bootstrap` or your own install), pass `--no-fetch-native` to `yobitsugi scan` to skip the download:
+
+```bash
+yobitsugi scan ./my-project --ephemeral-tools --no-fetch-native
+```
 
 ---
 
@@ -129,14 +186,16 @@ Every finding has a stable `id` (a hash of `tool` + `file` + `line` + `rule_id`)
 
 1. Creates a fresh temp directory and redirects its managed scanner venv there for the duration of the command.
 2. Detects the repo's languages and installs **only the pip scanners the repo actually needs** — semgrep won't be pulled into a Bash-only repo, bandit won't be pulled into a Go-only repo.
-3. Runs the scan against the throwaway venv (`PATH` is auto-prepended).
-4. Deletes the temp directory in a `finally` block. Your `~/.yobitsugi/tools/` is never touched.
+3. Downloads the right **trufflehog** release binary for your platform into the same temp dir. trufflehog is a Go binary and can't live inside a Python venv, but the temp tools dir is on the same lifecycle — `tempfile.mkdtemp` on entry, `shutil.rmtree` in the `finally`. Skip with `--no-fetch-native` if you've already got it on `PATH` (e.g. from `yobitsugi bootstrap`).
+4. Runs the scan against the throwaway venv — scanners run in parallel via a thread pool (see "Parallel scanning" above). `PATH` is auto-prepended so the temp scanners shadow anything on the system.
+5. Deletes the temp directory in a `finally` block. Your `~/.yobitsugi/tools/` is never touched.
 
 ```bash
 yobitsugi scan ./services/api --ephemeral-tools
+yobitsugi scan ./services/api --ephemeral-tools --no-fetch-native    # offline / already-bootstrapped
 ```
 
-If you'd rather pay the install cost once and keep scanners around, use `yobitsugi install-scanners` instead — that installs the Python scanners into a persistent venv at `~/.yobitsugi/tools/venv/`.
+If you'd rather pay the install cost once and keep scanners around, use `yobitsugi install-scanners` (pip scanners → `~/.yobitsugi/tools/venv/`) and `yobitsugi bootstrap` (trufflehog → system package manager) instead.
 
 ---
 
@@ -149,7 +208,11 @@ If you'd rather pay the install cost once and keep scanners around, use `yobitsu
 
 # Standalone binary usage (CI, headless audits, scripting):
 yobitsugi scan ./services/api                    # scan, write findings.json
-yobitsugi scan ./services/api --ephemeral-tools  # …with throwaway scanner venv
+yobitsugi scan ./services/api --ephemeral-tools  # …with throwaway scanner venv + auto-fetched trufflehog
+yobitsugi scan ./services/api --concurrency 8    # parallel scanners, cap 8 in-flight (default 6)
+yobitsugi scan ./services/api --sequential       # force one-at-a-time (debugging)
+yobitsugi scan ./services/api --only bandit semgrep   # restrict to specific scanners
+yobitsugi scan ./services/api --no-fetch-native  # skip the trufflehog download (you have it already)
 yobitsugi findings ~/.yobitsugi/<workspace>      # pretty-print existing findings
 yobitsugi findings <ws> --severity HIGH --json   # JSON for piping
 yobitsugi summary <ws> --format markdown         # the same markdown tables the assistant sees
@@ -166,6 +229,8 @@ yobitsugi list-scanners                          # every scanner + install statu
 yobitsugi install-scanners                       # persistent install of pip scanners into ~/.yobitsugi/tools/venv/
 yobitsugi install-scanners --all                 # force reinstall/upgrade all of them
 yobitsugi uninstall-scanners                     # wipe the managed venv
+yobitsugi bootstrap                              # persistent install of native scanners (trufflehog) via brew/apt/dnf/yum
+yobitsugi bootstrap --dry-run                    # preview the install command without running it
 ```
 
 There is no `yobitsugi run`, no `yobitsugi fix`, no `yobitsugi apply`, no `yobitsugi rollback`, no `yobitsugi config`. Those used to be CLI subcommands; they're now the host AI assistant's job, driven by the installed skill.
@@ -212,8 +277,12 @@ Recommended flow:
 ## Full command reference
 
 ```
-yobitsugi scan <path>                            # detect → run scanners → parse to findings.json
-yobitsugi scan <path> --ephemeral-tools          # …in a throwaway venv that's deleted on exit
+yobitsugi scan <path>                            # detect → run scanners (parallel) → parse to findings.json
+yobitsugi scan <path> --ephemeral-tools          # …in a throwaway venv that's deleted on exit (auto-fetches trufflehog)
+yobitsugi scan <path> --concurrency N            # cap parallel scanners (default 6, env: YOBITSUGI_SCAN_CONCURRENCY)
+yobitsugi scan <path> --sequential               # disable parallelism (debugging)
+yobitsugi scan <path> --only bandit semgrep      # restrict to specific scanners
+yobitsugi scan <path> --no-fetch-native          # skip the trufflehog auto-download
 yobitsugi scan <path> --out <workspace>          # write to a specific dir instead of ~/.yobitsugi/<name>-<ts>/
 
 yobitsugi findings <workspace>                   # pretty-print
@@ -233,9 +302,12 @@ yobitsugi list-platforms
 yobitsugi detect-platforms
 
 yobitsugi list-scanners
-yobitsugi install-scanners                       # missing pip scanners → ~/.yobitsugi/tools/venv/
+yobitsugi install-scanners                       # persistent install of missing pip scanners → ~/.yobitsugi/tools/venv/
 yobitsugi install-scanners --all                 # force reinstall/upgrade
 yobitsugi uninstall-scanners                     # wipe ~/.yobitsugi/tools/
+yobitsugi bootstrap                              # persistent install of trufflehog via brew/apt/dnf/yum
+yobitsugi bootstrap --dry-run                    # preview the install command
+yobitsugi bootstrap trufflehog                   # be explicit about which scanner
 
 yobitsugi version
 ```

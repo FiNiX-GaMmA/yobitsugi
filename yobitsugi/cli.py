@@ -186,16 +186,36 @@ def _with_optional_ephemeral_tools(fn, args: argparse.Namespace, root: Path) -> 
     registry = _load_scanner_registry()
     languages = _quick_detect_languages(root)
 
+    import shutil as _shutil
+
     with tools.ephemeral_tools_dir() as tmp:
         print(f"[ephemeral-tools] managed venv: {tmp / 'venv'}")
         print("[ephemeral-tools] installing scanners for detected languages: "
               f"{', '.join(languages) if languages else '(none yet)'}")
+
+        # ── Python scanners → pip-install into the ephemeral venv ──────────
         installed, failed = tools.install_missing_pip_scanners(registry, languages=languages)
         if installed:
             print(f"[ephemeral-tools] installed: {', '.join(installed)}")
         if failed:
             print(f"[ephemeral-tools] failed to install: {', '.join(failed)} "
                   "(scan will continue and mark those scanners as skipped)")
+
+        # ── trufflehog → drop the Go binary next to the venv ──────────────
+        # trufflehog can't live in a Python venv, but the managed tools dir
+        # is on the same ephemeral lifecycle: ephemeral_tools_dir() created
+        # it and will rmtree it on exit. The PATH-prepend in core.scan picks
+        # it up alongside the pip scanners.
+        if not getattr(args, "no_fetch_native", False) and _shutil.which("trufflehog") is None:
+            print("[ephemeral-tools] fetching trufflehog (Go binary, not pip-installable)…",
+                  end=" ", flush=True)
+            ok, msg = tools.install_trufflehog_into_tools_dir()
+            print("ok" if ok else "FAILED")
+            if not ok:
+                print(f"      {msg}")
+                print("      scan will continue; trufflehog will be marked skipped. "
+                      "Pre-install with `yobitsugi bootstrap` or pass --no-fetch-native to silence.")
+
         try:
             return fn()
         finally:
@@ -481,6 +501,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument(
         "--only", nargs="*",
         help="Restrict the scan to specific scanner names (e.g. --only bandit semgrep).",
+    )
+    p_scan.add_argument(
+        "--no-fetch-native", action="store_true",
+        help=(
+            "With --ephemeral-tools, don't auto-download the trufflehog binary "
+            "into the temp tools dir. Use this if you've already installed "
+            "trufflehog via `yobitsugi bootstrap` (or brew/apt) or if you're "
+            "running offline."
+        ),
     )
     p_scan.set_defaults(func=cmd_scan)
 

@@ -189,6 +189,94 @@ def ephemeral_tools_dir(base: Path | None = None) -> Iterator[Path]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def install_trufflehog_into_tools_dir() -> tuple[bool, str]:
+    """Download the right trufflehog release binary for the current platform
+    and drop it into ``tools_bin_path()`` so the existing PATH-prepend logic
+    picks it up automatically.
+
+    This is the workaround for the fact that trufflehog is a Go binary with
+    no maintained PyPI wrapper — we can't put it inside a *Python* venv, but
+    we can put it next to the venv in the same tools dir, which means it
+    shares the ephemeral lifecycle and gets cleaned up at the end of the run.
+
+    Returns ``(success, message)``. Failures are non-fatal — the caller logs
+    and the scan continues, marking trufflehog as ``skipped_missing_tool``.
+    """
+    import platform
+    import tarfile
+    import tempfile
+    import urllib.request
+
+    bin_dir = tools_bin_path()
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    target = bin_dir / ("trufflehog.exe" if os.name == "nt" else "trufflehog")
+    if target.exists():
+        return True, f"trufflehog already at {target}"
+
+    # Map platform → release asset name. trufflehog publishes a `_checksums.txt`
+    # plus per-arch tarballs at every release. URL shape is stable enough that
+    # we can ask GitHub for the "latest" redirect rather than hardcoding a
+    # version.
+    system = platform.system().lower()       # "darwin" | "linux" | "windows"
+    machine = platform.machine().lower()     # "x86_64" | "arm64" | "aarch64" | ...
+    arch = {
+        "x86_64": "amd64",
+        "amd64":  "amd64",
+        "arm64":  "arm64",
+        "aarch64":"arm64",
+    }.get(machine)
+    if system not in ("darwin", "linux") or arch is None:
+        return False, (
+            f"unsupported platform for auto-install: {system}/{machine}. "
+            "Install trufflehog via your system package manager — "
+            "`yobitsugi bootstrap` or see https://github.com/trufflesecurity/trufflehog#installation"
+        )
+
+    # Resolve the latest tag by reading the redirect from /releases/latest.
+    # We avoid the API endpoint to skip the rate-limit/auth hassle.
+    latest_url = "https://github.com/trufflesecurity/trufflehog/releases/latest"
+    try:
+        req = urllib.request.Request(latest_url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+            final_url = resp.geturl()
+        # final_url looks like https://github.com/.../releases/tag/v3.83.5
+        tag = final_url.rstrip("/").rsplit("/", 1)[-1]
+        version = tag.lstrip("v")
+    except Exception as e:
+        return False, f"could not resolve latest trufflehog version: {e}"
+
+    asset = f"trufflehog_{version}_{system}_{arch}.tar.gz"
+    download_url = (
+        f"https://github.com/trufflesecurity/trufflehog/releases/download/{tag}/{asset}"
+    )
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            tar_path = Path(td) / asset
+            with urllib.request.urlopen(download_url, timeout=60) as resp:  # noqa: S310
+                tar_path.write_bytes(resp.read())
+            with tarfile.open(tar_path) as tf:
+                # The archive root contains a `trufflehog` (or `trufflehog.exe`)
+                # binary plus license/readme. Extract just the binary so we
+                # don't leak docs into the bin dir.
+                member_name = "trufflehog.exe" if os.name == "nt" else "trufflehog"
+                try:
+                    member = tf.getmember(member_name)
+                except KeyError:
+                    return False, f"{asset} does not contain a {member_name!r} entry"
+                with tf.extractfile(member) as src:  # type: ignore[union-attr]
+                    if src is None:
+                        return False, f"could not read {member_name} from {asset}"
+                    target.write_bytes(src.read())
+        target.chmod(0o755)
+        return True, f"installed trufflehog {version} → {target}"
+    except Exception as e:
+        # Anything else — bad checksum, dead mirror, archive shape changed.
+        # Clean up the partial file so we don't leave a broken binary on PATH.
+        target.unlink(missing_ok=True)
+        return False, f"failed to install trufflehog {version}: {e}"
+
+
 def install_missing_pip_scanners(
     registry: dict, languages: Iterable[str] | None = None
 ) -> tuple[list[str], list[str]]:

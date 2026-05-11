@@ -1,15 +1,27 @@
 name: Release & Publish
 
-# Release policy: EVERY push to main is a release.
+# Release policy
+# ──────────────
+# • A direct `v*` tag push          → publishes that exact version. One release.
+# • A push to `main` whose HEAD     → no-op. The tag-push already shipped this commit;
+#   already has a `v*` tag            the workflow refuses to double-release the same
+#                                     code under a bumped patch number.
+# • A push to `main` without a tag  → auto-bumps the latest `vX.Y.Z` tag's patch
+#   on HEAD                           component, creates that tag, releases it.
+# • `release: published`            → builds artifacts again from the tag and uploads
+#                                     (idempotent — PyPI skip-existing is on).
+# • `workflow_dispatch`             → behaves like a `main` push.
 #
-# - prep    finds the latest vX.Y.Z tag, computes the next patch (vX.Y.{Z+1}).
-# - tag     creates and pushes that tag.
-# - build   uses hatch-vcs to read the new tag → wheel/sdist metadata version.
-# - release creates the GitHub Release with the artifacts attached.
-# - publish uploads to PyPI.
+# Job graph (worker nodes run in parallel where the graph branches):
 #
-# A direct `v*` tag push or a `release: published` event also runs the downstream jobs.
-# `workflow_dispatch` behaves like a main push.
+#     prep ──► tag ──┬─► build-wheel ──┐
+#                    │                  ├─► release   (parallel with publish)
+#                    └─► build-sdist ──┤
+#                       (parallel)     └─► publish    (parallel with release)
+#
+# `tag` is skipped on direct tag pushes (the tag already exists).
+# `build-wheel` and `build-sdist` run on separate ubuntu-latest runners
+# concurrently, then `release` and `publish` each pull both artifacts.
 
 on:
   push:
@@ -24,10 +36,16 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# Cancel an in-flight run if a newer push lands on the same ref. Avoids two
+# overlapping releases racing each other to PyPI.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # ------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
   # 1. Decide what (if anything) this run should release.
-  # ------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
   prep:
     name: Compute release plan
     runs-on: ubuntu-latest
@@ -66,18 +84,35 @@ jobs:
             echo "needs_tag=false" >> "$GITHUB_OUTPUT"
             echo "version=$version" >> "$GITHUB_OUTPUT"
             echo "tag=$tag"        >> "$GITHUB_OUTPUT"
-          else
-            # Main push, release: published, or workflow_dispatch → auto-bump patch.
-            echo "Auto-bumping: $latest → $computed_tag"
-            echo "release=true"    >> "$GITHUB_OUTPUT"
-            echo "needs_tag=true"  >> "$GITHUB_OUTPUT"
-            echo "version=$computed_version" >> "$GITHUB_OUTPUT"
-            echo "tag=$computed_tag"         >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-  # ------------------------------------------------------------------------
-  # 2. If pyproject.toml's version is new, create + push the matching tag.
-  # ------------------------------------------------------------------------
+          # Foot-gun guard: if HEAD already carries a `v*` tag, a previous
+          # tag-push has already shipped this commit. Don't auto-bump on top
+          # of it — that would publish the same code under a second version
+          # number (e.g. someone pushes `v1.0.0` then `main` and PyPI gets
+          # both `1.0.0` and `1.0.1` with identical wheels).
+          head_tag=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | head -n 1)
+          if [[ -n "$head_tag" ]]; then
+            echo "HEAD already has tag $head_tag — skipping auto-bump release."
+            echo "release=false"   >> "$GITHUB_OUTPUT"
+            echo "needs_tag=false" >> "$GITHUB_OUTPUT"
+            echo "version=${head_tag#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=$head_tag"   >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Default path: main push (or workflow_dispatch / release event)
+          # with no existing tag on HEAD → auto-bump patch.
+          echo "Auto-bumping: $latest → $computed_tag"
+          echo "release=true"    >> "$GITHUB_OUTPUT"
+          echo "needs_tag=true"  >> "$GITHUB_OUTPUT"
+          echo "version=$computed_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$computed_tag"         >> "$GITHUB_OUTPUT"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 2. Create the auto-bumped tag (only when prep said `needs_tag=true`).
+  # ──────────────────────────────────────────────────────────────────────────
   tag:
     name: Create git tag
     needs: prep
@@ -99,11 +134,11 @@ jobs:
           git tag -a "${{ needs.prep.outputs.tag }}" -m "Release ${{ needs.prep.outputs.tag }}"
           git push origin "${{ needs.prep.outputs.tag }}"
 
-  # ------------------------------------------------------------------------
-  # 3. Build sdist + wheel. Used by both `release` and `publish` jobs.
-  # ------------------------------------------------------------------------
-  build:
-    name: Build sdist + wheel
+  # ──────────────────────────────────────────────────────────────────────────
+  # 3a. Build the wheel on its own worker, in parallel with the sdist build.
+  # ──────────────────────────────────────────────────────────────────────────
+  build-wheel:
+    name: Build wheel
     needs: [prep, tag]
     if: |
       always() &&
@@ -114,40 +149,83 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Always build from the tagged commit so the artifact metadata matches the tag.
           ref: ${{ needs.prep.outputs.tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install build tooling
         run: |
           python -m pip install --upgrade pip
           pip install build twine
 
-      - name: Build
-        run: python -m build
+      - name: Build wheel
+        run: python -m build --wheel
 
-      - name: Verify distributions
-        run: twine check --strict dist/*
+      - name: Verify wheel
+        run: twine check --strict dist/*.whl
 
-      - name: Upload distribution artifacts
+      - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: dist-wheel
+          path: dist/*.whl
           if-no-files-found: error
           retention-days: 14
 
-  # ------------------------------------------------------------------------
-  # 4. Create a GitHub Release with the artifacts attached.
+  # ──────────────────────────────────────────────────────────────────────────
+  # 3b. Build the sdist on a separate worker, in parallel with the wheel build.
+  # ──────────────────────────────────────────────────────────────────────────
+  build-sdist:
+    name: Build sdist
+    needs: [prep, tag]
+    if: |
+      always() &&
+      needs.prep.outputs.release == 'true' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prep.outputs.tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build sdist
+        run: python -m build --sdist
+
+      - name: Verify sdist
+        run: twine check --strict dist/*.tar.gz
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 4. Create the GitHub Release.
+  #    Runs in parallel with `publish` (both fan out from the build jobs).
   #    Skipped on the `release: published` trigger (release already exists).
-  # ------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: [prep, build]
+    needs: [prep, build-wheel, build-sdist]
     if: needs.prep.outputs.release == 'true' && github.event_name != 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -158,10 +236,16 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prep.outputs.tag }}
 
-      - name: Download distribution artifacts
+      - name: Download wheel artifact
         uses: actions/download-artifact@v4
         with:
-          name: dist
+          name: dist-wheel
+          path: dist/
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-sdist
           path: dist/
 
       - name: Extract release notes from CHANGELOG.md
@@ -195,22 +279,29 @@ jobs:
             dist/*.tar.gz
           fail_on_unmatched_files: true
 
-  # ------------------------------------------------------------------------
-  # 5. Upload the same artifacts to PyPI. Gated behind the `pypi` environment.
-  # ------------------------------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
+  # 5. Upload to PyPI. Runs in parallel with `release`. Gated by the
+  #    `pypi` environment (set PYPI_TOKEN in the env's secrets).
+  # ──────────────────────────────────────────────────────────────────────────
   publish:
     name: Publish to PyPI
-    needs: [prep, build]
+    needs: [prep, build-wheel, build-sdist]
     if: needs.prep.outputs.release == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/p/yobitsugi
     steps:
-      - name: Download distribution artifacts
+      - name: Download wheel artifact
         uses: actions/download-artifact@v4
         with:
-          name: dist
+          name: dist-wheel
+          path: dist/
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-sdist
           path: dist/
 
       - name: Publish to PyPI
@@ -220,5 +311,7 @@ jobs:
           password: ${{ secrets.PYPI_TOKEN }}
           packages-dir: dist/
           verify-metadata: true
-          skip-existing: false
+          # skip-existing on: if the same version was already pushed (e.g. on a
+          # re-run after a transient PyPI 5xx), don't fail the workflow.
+          skip-existing: true
           print-hash: true

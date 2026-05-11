@@ -1,5 +1,22 @@
 name: CI
 
+# Each check runs on its own worker node so they execute in parallel rather
+# than back-to-back. Linting and type-checking are Python-version-independent
+# (they only need one runner), but the test suite is matrixed across 3.11 /
+# 3.12 / 3.13 since real users hit it on all three.
+#
+# Job graph (every job below is a fan-out from the trigger — none of them
+# depend on each other, all run concurrently):
+#
+#     trigger ─┬─► lint        (1 worker)
+#              ├─► typecheck   (1 worker)
+#              ├─► tests-3.11  ┐
+#              ├─► tests-3.12  ├ (3 workers, matrix)
+#              ├─► tests-3.13  ┘
+#              ├─► smoke-3.11  ┐
+#              ├─► smoke-3.12  ├ (3 workers, matrix)
+#              └─► smoke-3.13  ┘
+
 on:
   push:
     branches: [main]
@@ -11,14 +28,73 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# Cancel older runs on the same branch when a newer commit lands. Saves CI
+# minutes when you push twice in a row.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Lint (ruff) — Python-version-independent. One runner, not three.
+  # ──────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: ruff check
+        run: ruff check yobitsugi
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Type check (mypy) — also Python-version-independent. One runner.
+  # ──────────────────────────────────────────────────────────────────────────
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    # mypy historically had findings we haven't burned down yet; don't gate
+    # the whole CI on it. Surface it as a check but allow failures.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: mypy
+        run: mypy yobitsugi --ignore-missing-imports
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Test suite — actually depends on Python version, so matrixed across 3.
+  # Each matrix slot is its own worker node.
+  # ──────────────────────────────────────────────────────────────────────────
+  tests:
+    name: Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -33,14 +109,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Lint (ruff)
-        run: ruff check yobitsugi
-
-      - name: Type check (mypy)
-        run: mypy yobitsugi --ignore-missing-imports
-        continue-on-error: true
-
-      - name: Tests
+      - name: pytest
         run: |
           if [ -d tests ] && [ -n "$(ls tests/*.py 2>/dev/null)" ]; then
             pytest -v
@@ -48,7 +117,37 @@ jobs:
             echo "No tests yet — skipping."
           fi
 
-      - name: Smoke test CLI
+  # ──────────────────────────────────────────────────────────────────────────
+  # Smoke test the CLI — also matrixed since import-time / entrypoint issues
+  # do sometimes vary by Python version. Separate from `tests` so a unit-test
+  # failure doesn't mask a packaging regression.
+  # ──────────────────────────────────────────────────────────────────────────
+  smoke:
+    name: Smoke (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package
         run: |
-          yobitsugi version
-          yobitsugi list-platforms
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: yobitsugi version
+        run: yobitsugi version
+
+      - name: yobitsugi list-platforms
+        run: yobitsugi list-platforms
+
+      - name: yobitsugi list-scanners
+        run: yobitsugi list-scanners
