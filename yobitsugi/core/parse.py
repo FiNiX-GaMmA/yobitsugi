@@ -340,8 +340,20 @@ def _parse_brakeman(raw: str, root: Path) -> list[dict]:
 
 def _parse_bundler_audit(raw: str, root: Path) -> list[dict]:
     data = json.loads(raw)
-    out = []
-    for r in (data.get("results") or data if isinstance(data, list) else []):
+    out: list[dict] = []
+    # bundler-audit's JSON shape varies by version: older builds emit a top-
+    # level list of result dicts; newer ones wrap them in {"results": [...]}.
+    # The previous one-liner conflated those and tripped mypy because
+    # `data.get("results")` is undefined when data is a list.
+    if isinstance(data, dict):
+        results = data.get("results") or []
+    elif isinstance(data, list):
+        results = data
+    else:
+        results = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
         adv = r.get("advisory", {})
         out.append(finding(
             "bundler-audit",
@@ -402,7 +414,7 @@ def _parse_flawfinder(raw: str, root: Path) -> list[dict]:
 
 
 def _parse_cppcheck(raw: str, root: Path) -> list[dict]:
-    out = []
+    out: list[dict] = []
     try:
         tree = ET.fromstring(raw)
     except ET.ParseError:
@@ -466,7 +478,7 @@ def _parse_shellcheck(raw: str, root: Path) -> list[dict]:
 
 
 def _parse_spotbugs(raw: str, root: Path) -> list[dict]:
-    out = []
+    out: list[dict] = []
     try:
         tree = ET.fromstring(raw)
     except ET.ParseError:

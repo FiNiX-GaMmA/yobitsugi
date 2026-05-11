@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
-    import yaml  # type: ignore
+    import yaml
 except ImportError:
     sys.stderr.write("PyYAML is required: pip install pyyaml\n")
     sys.exit(2)

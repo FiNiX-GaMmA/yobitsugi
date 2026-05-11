@@ -82,7 +82,7 @@ all = [
     "flawfinder>=2.0",
     "shellcheck-py>=0.10",
 ]
-dev = ["pytest>=7", "ruff>=0.4", "mypy>=1.8"]
+dev = ["pytest>=7", "ruff>=0.4", "mypy>=1.8", "types-PyYAML>=6.0", "types-requests>=2.31"]
 
 [project.scripts]
 yobitsugi = "yobitsugi.cli:main"

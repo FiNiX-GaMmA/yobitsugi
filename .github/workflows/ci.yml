@@ -64,9 +64,11 @@ jobs:
   typecheck:
     name: Type check (mypy)
     runs-on: ubuntu-latest
-    # mypy historically had findings we haven't burned down yet; don't gate
-    # the whole CI on it. Surface it as a check but allow failures.
-    continue-on-error: true
+    # mypy used to be advisory (continue-on-error). The codebase is now clean
+    # under `mypy yobitsugi --ignore-missing-imports`, so a regression here
+    # gates the merge. types-PyYAML and types-requests come in via the dev
+    # extras so the bare `import yaml` / `import requests` don't need
+    # `# type: ignore` comments any more.
     steps:
       - uses: actions/checkout@v4
 

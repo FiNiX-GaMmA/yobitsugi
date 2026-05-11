@@ -273,7 +273,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
 def _load_scanner_registry() -> dict:
     """Load yobitsugi/data/scanners.yaml without making `yaml` a hard CLI dep."""
-    import yaml  # type: ignore
+    import yaml
 
     pkg_root = Path(__file__).resolve().parent
     with (pkg_root / "data" / "scanners.yaml").open(encoding="utf-8") as f:
